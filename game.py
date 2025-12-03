@@ -25,37 +25,179 @@ class Game:
         self.commands["help"] = help
         quit = Command("quit", " : quitter le jeu", Actions.quit, 0)
         self.commands["quit"] = quit
-        go = Command("go", " <direction> : se déplacer dans une direction cardinale (N, E, S, O)", Actions.go, 1)
+        # On met à jour juste le texte d'aide pour inclure haut/bas
+        go = Command(
+            "go",
+            " <direction> : se déplacer (N, S, E, O, haut, bas)",
+            Actions.go,
+            1
+        )
         self.commands["go"] = go
         
-        # Setup rooms
+        # =======================
+        #   Setup rooms
+        # =======================
 
-        forest = Room("Forest", "dans une forêt enchantée. Vous entendez une brise légère à travers la cime des arbres.")
-        self.rooms.append(forest)
-        tower = Room("Tower", "dans une immense tour en pierre qui s'élève au dessus des nuages.")
-        self.rooms.append(tower)
-        cave = Room("Cave", "dans une grotte profonde et sombre. Des voix semblent provenir des profondeurs.")
-        self.rooms.append(cave)
-        cottage = Room("Cottage", "dans un petit chalet pittoresque avec un toit de chaume. Une épaisse fumée verte sort de la cheminée.")
-        self.rooms.append(cottage)
-        swamp = Room("Swamp", "dans un marécage sombre et ténébreux. L'eau bouillonne, les abords sont vaseux.")
-        self.rooms.append(swamp)
-        castle = Room("Castle", "dans un énorme château fort avec des douves et un pont levis. Sur les tours, des flèches en or massif.")
-        self.rooms.append(castle)
+        maison_haut = Room("maison-haut", "à l'étage de ta maison.")
+        maison_bas = Room("maison-bas", "au rez-de-chaussée de ta maison.")
+        village = Room("village", "sur la place du village.")
+        magasin = Room("magasin", "dans le petit magasin du village.")
+        magasin_echange = Room("magasin-echange", "à l'étage du magasin, dans la salle d'échange.")
+        maison_ancien = Room("maison-ancien", "devant l’ancienne maison en bas du village.")
+        foret = Room("foret", "à l'entrée de la forêt.")
+        foret_sombre = Room("foret-sombre", "dans une partie sombre de la forêt.")
+        route_capital = Room("route-capital", "sur la route menant à la capitale.")
+        avant_post_capital = Room(
+            "avant-post-capital",
+            "à l'avant-poste qui garde l'entrée de la capitale."
+        )
+        rue_capitale = Room(
+            "rue-capitale",
+            "dans la grande rue principale de la capitale."
+        )
+        guild = Room("guild", "dans la guilde des aventuriers.")
+        auberge = Room("auberge", "dans les étages de l'auberge de la capitale.")
+        magasin_capital = Room("magasin-capital", "dans le grand magasin de la capitale.")
+        foret_capital = Room("foret-capital", "dans la grande forêt au sud de la capitale.")
+        daungon = Room("daungon", "dans les sous-sols sombres de la capitale.")
 
-        # Create exits for rooms
+        # On les ajoute dans self.rooms
+        self.rooms = [
+            maison_haut,
+            maison_bas,
+            village,
+            magasin,
+            magasin_echange,
+            maison_ancien,
+            foret,
+            foret_sombre,
+            route_capital,
+            avant_post_capital,
+            rue_capitale,
+            guild,
+            auberge,
+            magasin_capital,
+            foret_capital,
+            daungon,
+        ]
 
-        forest.exits = {"N" : cave, "E" : tower, "S" : castle, "O" : None}
-        tower.exits = {"N" : cottage, "E" : None, "S" : swamp, "O" : forest}
-        cave.exits = {"N" : None, "E" : cottage, "S" : forest, "O" : None}
-        cottage.exits = {"N" : None, "E" : None, "S" : tower, "O" : cave}
-        swamp.exits = {"N" : tower, "E" : None, "S" : None, "O" : castle}
-        castle.exits = {"N" : forest, "E" : swamp, "S" : None, "O" : None}
+        # =========================
+        #   Create exits for rooms
+        # =========================
 
+        # Maison haut / bas
+        maison_haut.exits = {
+            "N": None, "E": None, "S": None, "O": None,
+            "haut": None, "bas": maison_bas
+        }
+
+        maison_bas.exits = {
+            "N": None, "E": None, "S": village, "O": None,
+            "haut": maison_haut, "bas": None
+        }
+
+        # Village central
+        village.exits = {
+            "N": maison_bas, "E": foret, "S": maison_ancien, "O": magasin,
+            "haut": None, "bas": None
+        }
+
+        # Magasin du village
+        magasin.exits = {
+            "N": None, "E": village, "S": None, "O": None,
+            "haut": magasin_echange, "bas": None
+        }
+
+        # Salle d'échange au-dessus du magasin
+        magasin_echange.exits = {
+            "N": None, "E": None, "S": None, "O": None,
+            "haut": None, "bas": magasin
+        }
+
+        # Ancienne maison (au sud du village)
+        maison_ancien.exits = {
+            "N": village, "E": None, "S": None, "O": None,
+            "haut": None, "bas": None
+        }
+
+        # Forêt
+        foret.exits = {
+            "N": None, "E": foret_sombre, "S": None, "O": village,
+            "haut": None, "bas": None
+        }
+
+        # Forêt sombre
+        foret_sombre.exits = {
+            "N": None, "E": route_capital, "S": None, "O": foret,
+            "haut": None, "bas": None
+        }
+
+        # Route vers la capitale
+        route_capital.exits = {
+            "N": None, "E": avant_post_capital, "S": None, "O": foret_sombre,
+            "haut": None, "bas": None
+        }
+
+        # Avant-poste
+        avant_post_capital.exits = {
+            "N": None, "E": None, "S": rue_capitale, "O": route_capital,
+            "haut": None, "bas": None
+        }
+
+        # Rue principale de la capitale
+        rue_capitale.exits = {
+            "N": avant_post_capital, "E": magasin_capital,
+            "S": foret_capital, "O": guild,
+            "haut": None, "bas": None
+        }
+
+        # Guild
+        guild.exits = {
+            "N": None, "E": rue_capitale, "S": None, "O": None,
+            "haut": auberge, "bas": None
+        }
+
+        # Auberge (étage)
+        auberge.exits = {
+            "N": None, "E": None, "S": None, "O": None,
+            "haut": None, "bas": guild
+        }
+
+        # Magasin de la capitale
+        magasin_capital.exits = {
+            "N": None, "E": None, "S": None, "O": rue_capitale,
+            "haut": None, "bas": None
+        }
+
+        # Forêt capitale
+        foret_capital.exits = {
+            "N": None,
+            "E": None, "S": None, "O": None,
+            "haut": None, "bas": None
+        }
+
+        # Daungon (sous-sol)
+        daungon.exits = {
+            "N": None, "E": None, "S": None, "O": None,
+            "haut": rue_capitale,
+            "bas": None
+        }
+
+        # =========================
+        #  Enregistrer les directions valides (TP)
+        # =========================
+
+        for room in self.rooms:
+            for direction in room.exits.keys():
+                Room.register_direction(direction)
+
+        # =========================
         # Setup player and starting room
+        # =========================
 
         self.player = Player(input("\nEntrez votre nom: "))
-        self.player.current_room = swamp
+        # On commence : à l'étage de la maison
+        self.player.current_room = maison_haut
 
     # Play the game
     def play(self):
@@ -91,7 +233,6 @@ class Game:
     def print_welcome(self):
         print(f"\nBienvenue {self.player.name} dans ce jeu d'aventure !")
         print("Entrez 'help' si vous avez besoin d'aide.")
-        #
         print(self.player.current_room.get_long_description())
     
 

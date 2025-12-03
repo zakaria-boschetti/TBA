@@ -21,7 +21,13 @@ class Actions:
     def go(game, list_of_words, number_of_parameters):
         """
         Move the player in the direction specified by the parameter.
-        The parameter must be a cardinal direction (N, E, S, O).
+
+        The parameter must correspond à une direction valide du jeu :
+        - directions cardinales : N, S, E, O (ou nord, sud, est, ouest)
+        - directions verticales : haut / bas (U, D, monter, descendre)
+
+        La vérification et la normalisation de la direction sont faites
+        dans Player.move / Room.normalize_direction.
 
         Args:
             game (Game): The game object.
@@ -30,19 +36,6 @@ class Actions:
 
         Returns:
             bool: True if the command was executed successfully, False otherwise.
-
-        Examples:
-        
-        >>> from game import Game
-        >>> game = Game()
-        >>> game.setup()
-        >>> go(game, ["go", "N"], 1)
-        True
-        >>> go(game, ["go", "N", "E"], 1)
-        False
-        >>> go(game, ["go"], 1)
-        False
-
         """
         
         player = game.player
@@ -109,19 +102,6 @@ class Actions:
 
         Returns:
             bool: True if the command was executed successfully, False otherwise.
-
-        Examples:
-
-        >>> from game import Game
-        >>> game = Game()
-        >>> game.setup()
-        >>> help(game, ["help"], 0)
-        True
-        >>> help(game, ["help", "N"], 0)
-        False
-        >>> help(game, ["help", "N", "E"], 0)
-        False
-
         """
 
         # If the number of parameters is incorrect, print an error message and return False.

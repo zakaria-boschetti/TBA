@@ -31,24 +31,73 @@ class Room:
     Aucune.
     """
 
+    # Ensemble des directions valides (rempli automatiquement depuis la map)
+    VALID_DIRECTIONS = set()
 
+    # Dictionnaire pour normaliser les directions saisies par le joueur
+    # vers une forme canonique (N, S, E, O, "haut", "bas", etc.)
+    DIRECTION_MAP = {
+        "n": "N",
+        "nord": "N",
 
+        "s": "S",
+        "sud": "S",
 
+        "e": "E",
+        "est": "E",
 
+        "o": "O",
+        "ouest": "O",
 
+        "u": "haut",
+        "up": "haut",
+        "haut": "haut",
+        "monter": "haut",
+
+        "d": "bas",
+        "down": "bas",
+        "bas": "bas",
+        "descendre": "bas",
+    }
 
     # Define the constructor. 
     def __init__(self, name, description):
         self.name = name
         self.description = description
         self.exits = {}
-    
+
+    @staticmethod
+    def normalize_direction(direction):
+        """
+        Prend une direction entrée par le joueur (ex: 'n', 'Nord', 'ouest', 'U')
+        et la renvoie sous forme normalisée (ex: 'N', 'O', 'haut', 'bas').
+        Retourne None si la direction n'est pas reconnue.
+        """
+        if not isinstance(direction, str):
+            return None
+        d = direction.strip().lower()
+        return Room.DIRECTION_MAP.get(d, None)
+
+    @classmethod
+    def register_direction(cls, direction):
+        """
+        Enregistre une direction comme valide dans l'ensemble global
+        des directions possibles.
+        Appelée depuis la construction de la map (game.setup).
+        """
+        cls.VALID_DIRECTIONS.add(direction)
+
     # Define the get_exit method.
     def get_exit(self, direction):
 
+        # Normaliser la direction avant de chercher dans le dictionnaire
+        normalized = Room.normalize_direction(direction)
+        if normalized is None:
+            return None
+
         # Return the room in the given direction if it exists.
-        if direction in self.exits.keys():
-            return self.exits[direction]
+        if normalized in self.exits.keys():
+            return self.exits[normalized]
         else:
             return None
     

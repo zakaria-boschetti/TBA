@@ -1,4 +1,6 @@
 # Define the Player class.
+from room import Room 
+
 class Player():
 
     """
@@ -30,8 +32,25 @@ class Player():
     
     # Define the move method.
     def move(self, direction):
-        # Get the next room from the exits dictionary of the current room.
-        next_room = self.current_room.exits[direction]
+        """
+        Tente de déplacer le joueur dans la direction donnée.
+
+        - Si la direction n'est pas reconnue (ex: 'H') :
+              → "Direction 'H' non reconnue."
+        - Si la direction est valide mais qu'il n'y a pas de sortie dans cette direction :
+              → "Aucune porte dans cette direction !"
+        """
+
+        # Normaliser la direction
+        normalized = Room.normalize_direction(direction)
+
+        # Si la direction n'est pas reconnue par notre table
+        if normalized is None or normalized not in Room.VALID_DIRECTIONS:
+            print(f"\nDirection '{direction}' non reconnue.\n")
+            return False
+
+        # On utilise get_exit de Room qui travaille avec la direction normalisée
+        next_room = self.current_room.get_exit(normalized)
 
         # If the next room is None, print an error message and return False.
         if next_room is None:
