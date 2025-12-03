@@ -65,6 +65,7 @@ class Room:
         self.name = name
         self.description = description
         self.exits = {}
+        self.inventory = {}
 
     @staticmethod
     def normalize_direction(direction):
@@ -113,3 +114,21 @@ class Room:
     # Return a long description of this room including exits.
     def get_long_description(self):
         return f"\nVous êtes {self.description}\n\n{self.get_exit_string()}\n"
+    
+    def get_inventory(self):
+        """
+        Retourne une chaîne décrivant ce que contient la pièce.
+
+        - Si la pièce est vide :
+              "Il n'y a rien ici."
+        - Sinon :
+              "La pièce contient :"
+                 - nom : description (x kg)
+        """
+        if not self.inventory:
+            return "\nIl n'y a rien ici.\n"
+
+        s = "\nLa pièce contient :\n"
+        for item in self.inventory.values():
+            s += f"    - {item}\n"
+        return s

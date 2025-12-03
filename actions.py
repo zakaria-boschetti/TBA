@@ -1,5 +1,7 @@
 # Description: The actions module.
 
+from room import Room
+from item import Item
 from player import Player
 
 # The actions module contains the functions that are called when a command is executed.
@@ -85,6 +87,98 @@ class Actions:
 
         player = game.player
         print(player.get_history())
+        return True
+    
+    def look(game, list_of_words, number_of_parameters):
+        """
+        Affiche la description de la pièce et les items présents.
+        """
+        l = len(list_of_words)
+        if l != number_of_parameters + 1:
+            command_word = list_of_words[0]
+            print(MSG0.format(command_word=command_word))
+            return False
+
+        room = game.player.current_room
+        # On ré-affiche la description de la pièce
+        print(room.get_long_description())
+        # Puis l'inventaire de la pièce
+        print(room.get_inventory())
+        return True
+    
+    def take(game, list_of_words, number_of_parameters):
+        """
+        Prendre un item dans la pièce et le mettre dans l'inventaire du joueur.
+        """
+        l = len(list_of_words)
+        if l != number_of_parameters + 1:
+            command_word = list_of_words[0]
+            print(MSG1.format(command_word=command_word))
+            return False
+
+        item_name = list_of_words[1]
+        player = game.player
+        room = player.current_room
+
+        # L'objet est-il dans la pièce ?
+        if item_name not in room.inventory:
+            print(f"\nL'objet '{item_name}' n'est pas dans la pièce.\n")
+            return False
+
+        item = room.inventory[item_name]
+
+        # Vérifier la limite de poids
+        if player.get_current_weight() + item.weight > player.max_weight:
+            print(f"\nVous ne pouvez pas prendre l'objet '{item_name}' : poids maximal atteint.\n")
+            return False
+
+        # Déplacer l'objet de la pièce vers l'inventaire du joueur
+        player.inventory[item_name] = item
+        del room.inventory[item_name]
+
+        print(f"\nVous avez pris l'objet '{item_name}'.\n")
+        return True
+
+    def drop(game, list_of_words, number_of_parameters):
+        """
+        Déposer un item de l'inventaire dans la pièce actuelle.
+        """
+        l = len(list_of_words)
+        if l != number_of_parameters + 1:
+            command_word = list_of_words[0]
+            print(MSG1.format(command_word=command_word))
+            return False
+
+        item_name = list_of_words[1]
+        player = game.player
+        room = player.current_room
+
+        # L'objet est-il dans l'inventaire ?
+        if item_name not in player.inventory:
+            print(f"\nL'objet '{item_name}' n'est pas dans l'inventaire.\n")
+            return False
+
+        item = player.inventory[item_name]
+
+        # Déplacer l'objet de l'inventaire vers la pièce
+        room.inventory[item_name] = item
+        del player.inventory[item_name]
+
+        print(f"\nVous avez déposé l'objet '{item_name}'.\n")
+        return True
+
+    def check(game, list_of_words, number_of_parameters):
+        """
+        Affiche l'inventaire du joueur.
+        """
+        l = len(list_of_words)
+        if l != number_of_parameters + 1:
+            command_word = list_of_words[0]
+            print(MSG0.format(command_word=command_word))
+            return False
+
+        player = game.player
+        print(player.get_inventory())
         return True
 
     def quit(game, list_of_words, number_of_parameters):

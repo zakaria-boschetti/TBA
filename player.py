@@ -1,5 +1,6 @@
 # Define the Player class.
-from room import Room 
+from room import Room
+from item import Item
 
 class Player():
 
@@ -30,6 +31,10 @@ class Player():
         self.name = name
         self.current_room = None
         self.history = []
+        # Inventaire du joueur
+        self.inventory = {}
+        # Poids maximal transportable
+        self.max_weight = 5
     
     # Define the move method.
     def move(self, direction):
@@ -99,4 +104,27 @@ class Player():
             s += f"    - {room.description}\n"
         return s
 
+    def get_current_weight(self):
+        """
+        Calcule le poids total des objets dans l'inventaire.
+        """
+        return sum(item.weight for item in self.inventory.values())
+    
+    def get_inventory(self):
+        """
+        Retourne une chaîne représentant l'inventaire du joueur.
+
+        - Si l'inventaire est vide :
+              "Votre inventaire est vide."
+        - Sinon :
+              "Vous disposez des items suivants :"
+                 - nom : description (x kg)
+        """
+        if not self.inventory:
+            return "\nVotre inventaire est vide.\n"
+
+        s = "\nVous disposez des items suivants:\n"
+        for item in self.inventory.values():
+            s += f"    - {item}\n"
+        return s
     

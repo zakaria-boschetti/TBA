@@ -6,6 +6,7 @@ from room import Room
 from player import Player
 from command import Command
 from actions import Actions
+from item import Item
 
 class Game:
 
@@ -39,6 +40,18 @@ class Game:
 
         history = Command("history", " : afficher l'historique des lieux visités", Actions.history, 0)
         self.commands["history"] = history
+
+        look = Command("look", " : observer la pièce", Actions.look, 0)
+        self.commands["look"] = look
+
+        take = Command("take", " <objet> : prendre un objet", Actions.take, 1)
+        self.commands["take"] = take
+
+        drop = Command("drop", " <objet> : déposer un objet", Actions.drop, 1)
+        self.commands["drop"] = drop
+
+        check = Command("check", " : afficher l'inventaire", Actions.check, 0)
+        self.commands["check"] = check
         
         # =======================
         #   Setup rooms
@@ -86,6 +99,15 @@ class Game:
             foret_capital,
             daungon,
         ]
+
+        # =======================
+        #   Création des objets
+        # =======================
+
+        pomme = Item("pomme", "une pomme bien juteuse", 1)
+
+        # On met les pommes dans la maison du bas
+        maison_bas.inventory["pomme"] = pomme
 
         # =========================
         #   Create exits for rooms
