@@ -1,5 +1,7 @@
 # Description: The actions module.
 
+from player import Player
+
 # The actions module contains the functions that are called when a command is executed.
 # Each function takes 3 parameters:
 # - game: the game object
@@ -50,6 +52,39 @@ class Actions:
         direction = list_of_words[1]
         # Move the player in the direction specified by the parameter.
         player.move(direction)
+        return True
+    
+    def back(game, list_of_words, number_of_parameters):
+        """
+        Revient en arrière en utilisant l'historique du joueur.
+
+        Commande : back
+        Ne prend aucun paramètre.
+        """
+        l = len(list_of_words)
+        if l != number_of_parameters + 1:
+            command_word = list_of_words[0]
+            print(MSG0.format(command_word=command_word))
+            return False
+
+        player = game.player
+        return player.back()
+
+    def history(game, list_of_words, number_of_parameters):
+        """
+        Affiche l'historique des pièces déjà visitées.
+
+        Commande : history
+        Ne prend aucun paramètre.
+        """
+        l = len(list_of_words)
+        if l != number_of_parameters + 1:
+            command_word = list_of_words[0]
+            print(MSG0.format(command_word=command_word))
+            return False
+
+        player = game.player
+        print(player.get_history())
         return True
 
     def quit(game, list_of_words, number_of_parameters):

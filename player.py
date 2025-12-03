@@ -29,6 +29,7 @@ class Player():
     def __init__(self, name):
         self.name = name
         self.current_room = None
+        self.history = []
     
     # Define the move method.
     def move(self, direction):
@@ -39,6 +40,10 @@ class Player():
               → "Direction 'H' non reconnue."
         - Si la direction est valide mais qu'il n'y a pas de sortie dans cette direction :
               → "Aucune porte dans cette direction !"
+        - Sinon :
+              → on ajoute la salle actuelle à l'historique,
+                 on change de salle, on affiche la nouvelle description
+                 et l'historique.
         """
 
         # Normaliser la direction
@@ -57,9 +62,41 @@ class Player():
             print("\nAucune porte dans cette direction !\n")
             return False
         
+        self.history.append(self.current_room)
+        
         # Set the current room to the next room.
         self.current_room = next_room
         print(self.current_room.get_long_description())
         return True
+    
+    def back(self):
+        """
+        Revient en arrière si possible, en utilisant l'historique.
+
+        - Si l'historique est vide : impossible de revenir en arrière.
+        - Sinon : dépile la dernière pièce visitée, s'y déplace,
+                  affiche la description et l'historique.
+        """
+        if not self.history:
+            print("\nImpossible de revenir en arrière : aucun déplacement précédent.\n")
+            return False
+
+        previous_room = self.history.pop()
+        self.current_room = previous_room
+        print(self.current_room.get_long_description())
+        return True
+
+    def get_history(self):
+        """
+        Construit une chaîne de caractères représentant l'historique des pièces
+        visitées (sans la pièce actuelle).
+        """
+        if not self.history:
+            return "\nVous n'avez encore visité aucune autre pièce.\n"
+
+        s = "\nVous avez déja visité les pièces suivantes:\n"
+        for room in self.history:
+            s += f"    - {room.description}\n"
+        return s
 
     

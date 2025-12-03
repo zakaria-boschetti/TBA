@@ -33,6 +33,12 @@ class Game:
             1
         )
         self.commands["go"] = go
+
+        back = Command("back", " : revenir au lieu précédent", Actions.back, 0)
+        self.commands["back"] = back
+
+        history = Command("history", " : afficher l'historique des lieux visités", Actions.history, 0)
+        self.commands["history"] = history
         
         # =======================
         #   Setup rooms
