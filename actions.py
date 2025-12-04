@@ -33,28 +33,31 @@ class Actions:
         La vérification et la normalisation de la direction sont faites
         dans Player.move / Room.normalize_direction.
 
-        Args:
-            game (Game): The game object.
-            list_of_words (list): The list of words in the command.
-            number_of_parameters (int): The number of parameters expected by the command.
-
         Returns:
-            bool: True if the command was executed successfully, False otherwise.
+            bool: True si le déplacement a réussi, False sinon.
         """
         
         player = game.player
         l = len(list_of_words)
-        # If the number of parameters is incorrect, print an error message and return False.
+
+        # Vérifier le nombre de paramètres
         if l != number_of_parameters + 1:
             command_word = list_of_words[0]
             print(MSG1.format(command_word=command_word))
             return False
 
-        # Get the direction from the list of words.
+        # Direction demandée
         direction = list_of_words[1]
-        # Move the player in the direction specified by the parameter.
-        player.move(direction)
-        return True
+
+        # On tente de déplacer le joueur
+        success = player.move(direction)
+
+        # Si le déplacement a réussi, on fait bouger les PNJ
+        if success:
+            game.update_characters()
+
+        return success
+
     
     def back(game, list_of_words, number_of_parameters):
         """
@@ -91,7 +94,7 @@ class Actions:
     
     def look(game, list_of_words, number_of_parameters):
         """
-        Affiche la description de la pièce et les items présents.
+        Affiche la description de la pièce, les items et les PNJ présents.
         """
         l = len(list_of_words)
         if l != number_of_parameters + 1:
@@ -100,11 +103,22 @@ class Actions:
             return False
 
         room = game.player.current_room
-        # On ré-affiche la description de la pièce
+
+        # Description de la pièce + sorties
         print(room.get_long_description())
-        # Puis l'inventaire de la pièce
+
+        # Items dans la pièce
         print(room.get_inventory())
+
+        # PNJ dans la pièce
+        if room.characters:
+            print("\nPersonnages présents :")
+            for char in room.characters.values():
+                print(f"    - {char}")
+            print()
+
         return True
+
     
     def take(game, list_of_words, number_of_parameters):
         """
@@ -180,6 +194,32 @@ class Actions:
         player = game.player
         print(player.get_inventory())
         return True
+    
+    def talk(game, list_of_words, number_of_parameters):
+        """
+        Parler à un PNJ dans la pièce actuelle.
+
+        Usage : talk <nom>
+        """
+        l = len(list_of_words)
+        if l != number_of_parameters + 1:
+            command_word = list_of_words[0]
+            print(MSG1.format(command_word=command_word))
+            return False
+
+        name = list_of_words[1].lower()
+        room = game.player.current_room
+
+        if name not in room.characters:
+            print(f"\nIl n'y a pas de personnage nommé '{name}' ici.\n")
+            return False
+
+        char = room.characters[name]
+        msg = char.get_msg()
+        if msg:
+            print(f"\n{msg}\n")
+        return True
+
 
     def quit(game, list_of_words, number_of_parameters):
         """

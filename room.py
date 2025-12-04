@@ -66,6 +66,7 @@ class Room:
         self.description = description
         self.exits = {}
         self.inventory = {}
+        self.characters = {}
 
     @staticmethod
     def normalize_direction(direction):

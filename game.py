@@ -7,6 +7,9 @@ from player import Player
 from command import Command
 from actions import Actions
 from item import Item
+from character import Character
+
+DEBUG = True
 
 class Game:
 
@@ -16,6 +19,7 @@ class Game:
         self.rooms = []
         self.commands = {}
         self.player = None
+        self.characters = []
     
     # Setup the game
     def setup(self):
@@ -53,6 +57,9 @@ class Game:
         check = Command("check", " : afficher l'inventaire", Actions.check, 0)
         self.commands["check"] = check
         
+        talk = Command("talk", " <personnage> : parler à un personnage", Actions.talk, 1)
+        self.commands["talk"] = talk
+
         # =======================
         #   Setup rooms
         # =======================
@@ -108,6 +115,35 @@ class Game:
 
         # On met les pommes dans la maison du bas
         maison_bas.inventory["pomme"] = pomme
+
+        # =======================
+        #   Création des PNJ
+        # =======================
+
+        mere = Character(
+            "mere",
+            "ta mère, elle a l'air inquiète",
+            maison_bas,
+            ["Range ta chambre !", "Fais attention sur la route."]
+        )
+
+        marchand = Character(
+            "marchand",
+            "un marchand ambulant",
+            magasin,
+            [
+                "Bonjour, tu veux acheter quelque chose ?",
+                "Je voyage entre le village et la capitale."
+            ]
+        )
+
+        # Associer les PNJ à leurs salles de départ
+        maison_bas.characters["mere"] = mere
+        magasin.characters["marchand"] = marchand
+
+        # PNJ mis à jour automatiquement
+        self.characters = [marchand]
+
 
         # =========================
         #   Create exits for rooms
@@ -227,15 +263,26 @@ class Game:
         # On commence : à l'étage de la maison
         self.player.current_room = maison_haut
 
+    def update_characters(self):
+        """
+        Met à jour la position des PNJ mobiles à chaque tour de jeu.
+        """
+        for c in self.characters:
+            moved = c.move()
+            if DEBUG and moved:
+                print(f"DEBUG: {c.name} s'est déplacé dans {c.current_room.name}")
+
+
     # Play the game
     def play(self):
         self.setup()
         self.print_welcome()
         # Loop until the game is finished
         while not self.finished:
-            # Get the command from the player
+            # On lit la commande du joueur
             self.process_command(input("> "))
         return None
+
 
     # Process the command entered by the player
     def process_command(self, command_string) -> None:
