@@ -1,0 +1,16 @@
+A	.gitignore
+M	README.md
+D	__pycache__/actions.cpython-312.pyc
+D	__pycache__/character.cpython-312.pyc
+D	__pycache__/command.cpython-312.pyc
+D	__pycache__/item.cpython-312.pyc
+D	__pycache__/player.cpython-312.pyc
+D	__pycache__/room.cpython-312.pyc
+M	actions.py
+D	character.py
+M	command.py
+M	game.py
+D	item.py
+M	player.py
+A	quest.py
+M	room.py
