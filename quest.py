@@ -309,7 +309,9 @@ class Quest:
                 f"{action} {target}",
                 f"{action} avec {target}",
                 f"{action} le {target}",
-                f"{action} la {target}"
+                f"{action} la {target}",
+                f"{action} à {target}",
+                
             ]
         else:
             objective_variations = [action]
@@ -737,3 +739,7 @@ class QuestManager:
             print(quest.get_details(current_counts))
         else:
             print(f"\nQuête '{quest_title}' non trouvée.\n")
+            
+    def all_quests_completed(self):
+        """Retourne True si toutes les quêtes sont terminées."""
+        return len(self.active_quests) == 0 and all(q.is_completed for q in self.quests)

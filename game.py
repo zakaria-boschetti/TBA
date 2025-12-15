@@ -8,6 +8,7 @@ from command import Command
 from actions import Actions
 from item import Item
 from character import Character
+from quest import Quest
 
 DEBUG = True
 
@@ -23,245 +24,239 @@ class Game:
     
     # Setup the game
     def setup(self):
+        self._setup_commands()
+        self._setup_rooms()
+        self._setup_items()
+        self._setup_characters()
+        self._setup_exits()
+        self._register_directions()
+        self._setup_player()
+        self._setup_quests()
 
-        # Setup commands
-
-        help = Command("help", " : afficher cette aide", Actions.help, 0)
-        self.commands["help"] = help
-        quit = Command("quit", " : quitter le jeu", Actions.quit, 0)
-        self.commands["quit"] = quit
-        # On met à jour juste le texte d'aide pour inclure haut/bas
-        go = Command(
+    
+    def _setup_commands(self):
+        self.commands["help"] = Command("help", " : afficher cette aide", Actions.help, 0)
+        self.commands["quit"] = Command("quit", " : quitter le jeu", Actions.quit, 0)
+        self.commands["go"] = Command(
             "go",
             " <direction> : se déplacer (N, S, E, O, haut, bas)",
             Actions.go,
             1
         )
-        self.commands["go"] = go
+        self.commands["back"] = Command("back", " : revenir au lieu précédent", Actions.back, 0)
+        self.commands["history"] = Command("history", " : afficher l'historique des lieux visités", Actions.history, 0)
+        self.commands["look"] = Command("look", " : observer la pièce", Actions.look, 0)
+        self.commands["take"] = Command("take", " <objet> : prendre un objet", Actions.take, 1)
+        self.commands["drop"] = Command("drop", " <objet> : déposer un objet", Actions.drop, 1)
+        self.commands["check"] = Command("check", " : afficher l'inventaire", Actions.check, 0)
+        self.commands["talk"] = Command("talk", " <personnage> : parler à un personnage", Actions.talk, 1)
+        self.commands["quests"] = Command("quests"
+                                          , " : afficher la liste des quêtes"
+                                          , Actions.quests
+                                          , 0)
+        self.commands["quest"] = Command("quest"
+                                         , " <titre> : afficher les détails d'une quête"
+                                         , Actions.quest
+                                         , 1)
+        self.commands["activate"] = Command("activate"
+                                            , " <titre> : activer une quête"
+                                            , Actions.activate
+                                            , 1)
+        self.commands["rewards"] = Command("rewards"
+                                           , " : afficher vos récompenses"
+                                           , Actions.rewards
+                                           , 0)
 
-        back = Command("back", " : revenir au lieu précédent", Actions.back, 0)
-        self.commands["back"] = back
+    def _setup_rooms(self):
+        self.maison_haut = Room("maison-haut", "à l'étage de ta maison.")
+        self.maison_bas = Room("maison-bas", "au rez-de-chaussée de ta maison.")
+        self.village = Room("village", "sur la place du village.")
+        self.magasin = Room("magasin", "dans le petit magasin du village.")
+        self.magasin_echange = Room("magasin-echange", "à l'étage du magasin.")
+        self.maison_ancien = Room("maison-ancien", "devant l’ancienne maison.")
+        self.foret = Room("foret", "à l'entrée de la forêt.")
+        self.foret_sombre = Room("foret-sombre", "dans une partie sombre de la forêt.")
+        self.route_capital = Room("route-capital", "sur la route menant à la capitale.")
+        self.avant_post_capital = Room("avant-post-capital", "à l'avant-poste de la capitale.")
+        self.rue_capitale = Room("rue-capitale", "dans la rue principale de la capitale.")
+        self.guild = Room("guild", "dans la guilde des aventuriers.")
+        self.auberge = Room("auberge", "dans l'auberge.")
+        self.magasin_capital = Room("magasin-capital", "dans le magasin de la capitale.")
+        self.foret_capital = Room("foret-capital", "dans la forêt de la capitale.")
+        self.daungon = Room("daungon", "dans les sous-sols sombres.")
 
-        history = Command("history", " : afficher l'historique des lieux visités", Actions.history, 0)
-        self.commands["history"] = history
-
-        look = Command("look", " : observer la pièce", Actions.look, 0)
-        self.commands["look"] = look
-
-        take = Command("take", " <objet> : prendre un objet", Actions.take, 1)
-        self.commands["take"] = take
-
-        drop = Command("drop", " <objet> : déposer un objet", Actions.drop, 1)
-        self.commands["drop"] = drop
-
-        check = Command("check", " : afficher l'inventaire", Actions.check, 0)
-        self.commands["check"] = check
-        
-        talk = Command("talk", " <personnage> : parler à un personnage", Actions.talk, 1)
-        self.commands["talk"] = talk
-
-        # =======================
-        #   Setup rooms
-        # =======================
-
-        maison_haut = Room("maison-haut", "à l'étage de ta maison.")
-        maison_bas = Room("maison-bas", "au rez-de-chaussée de ta maison.")
-        village = Room("village", "sur la place du village.")
-        magasin = Room("magasin", "dans le petit magasin du village.")
-        magasin_echange = Room("magasin-echange", "à l'étage du magasin, dans la salle d'échange.")
-        maison_ancien = Room("maison-ancien", "devant l’ancienne maison en bas du village.")
-        foret = Room("foret", "à l'entrée de la forêt.")
-        foret_sombre = Room("foret-sombre", "dans une partie sombre de la forêt.")
-        route_capital = Room("route-capital", "sur la route menant à la capitale.")
-        avant_post_capital = Room(
-            "avant-post-capital",
-            "à l'avant-poste qui garde l'entrée de la capitale."
-        )
-        rue_capitale = Room(
-            "rue-capitale",
-            "dans la grande rue principale de la capitale."
-        )
-        guild = Room("guild", "dans la guilde des aventuriers.")
-        auberge = Room("auberge", "dans les étages de l'auberge de la capitale.")
-        magasin_capital = Room("magasin-capital", "dans le grand magasin de la capitale.")
-        foret_capital = Room("foret-capital", "dans la grande forêt au sud de la capitale.")
-        daungon = Room("daungon", "dans les sous-sols sombres de la capitale.")
-
-        # On les ajoute dans self.rooms
         self.rooms = [
-            maison_haut,
-            maison_bas,
-            village,
-            magasin,
-            magasin_echange,
-            maison_ancien,
-            foret,
-            foret_sombre,
-            route_capital,
-            avant_post_capital,
-            rue_capitale,
-            guild,
-            auberge,
-            magasin_capital,
-            foret_capital,
-            daungon,
+            self.maison_haut, self.maison_bas, self.village, self.magasin,
+            self.magasin_echange, self.maison_ancien, self.foret, self.foret_sombre,
+            self.route_capital, self.avant_post_capital, self.rue_capitale,
+            self.guild, self.auberge, self.magasin_capital, self.foret_capital,
+            self.daungon
         ]
+   
 
-        # =======================
-        #   Création des objets
-        # =======================
-
+    def _setup_items(self):
         pomme = Item("pomme", "une pomme bien juteuse", 1)
+        self.maison_bas.inventory["pomme"] = pomme
 
-        # On met les pommes dans la maison du bas
-        maison_bas.inventory["pomme"] = pomme
 
-        # =======================
-        #   Création des PNJ
-        # =======================
-
+    def _setup_characters(self):
         mere = Character(
             "mere",
             "ta mère, elle a l'air inquiète",
-            maison_bas,
+            self.maison_bas,
             ["Range ta chambre !", "Fais attention sur la route."]
         )
 
         marchand = Character(
             "marchand",
             "un marchand ambulant",
-            magasin,
-            [
-                "Bonjour, tu veux acheter quelque chose ?",
-                "Je voyage entre le village et la capitale."
-            ]
+            self.magasin,
+            ["Bonjour, tu veux acheter ?", "Je voyage beaucoup."]
         )
 
-        # Associer les PNJ à leurs salles de départ
-        maison_bas.characters["mere"] = mere
-        magasin.characters["marchand"] = marchand
-
-        # PNJ mis à jour automatiquement
+        self.maison_bas.characters["mere"] = mere
+        self.magasin.characters["marchand"] = marchand
         self.characters = [marchand]
 
 
-        # =========================
-        #   Create exits for rooms
-        # =========================
-
+    def _setup_exits(self):   
         # Maison haut / bas
-        maison_haut.exits = {
+        self.maison_haut.exits = {
             "N": None, "E": None, "S": None, "O": None,
-            "haut": None, "bas": maison_bas
+            "haut": None, "bas": self.maison_bas
         }
 
-        maison_bas.exits = {
-            "N": None, "E": None, "S": village, "O": None,
-            "haut": maison_haut, "bas": None
+        self.maison_bas.exits = {
+            "N": None, "E": None, "S": self.village, "O": None,
+            "haut": self.maison_haut, "bas": None
         }
 
         # Village central
-        village.exits = {
-            "N": maison_bas, "E": foret, "S": maison_ancien, "O": magasin,
+        self.village.exits = {
+            "N": self.maison_bas, "E": self.foret, "S": self.maison_ancien, "O": self.magasin,
             "haut": None, "bas": None
         }
 
         # Magasin du village
-        magasin.exits = {
-            "N": None, "E": village, "S": None, "O": None,
-            "haut": magasin_echange, "bas": None
+        self.magasin.exits = {
+            "N": None, "E": self.village, "S": None, "O": None,
+            "haut": self.magasin_echange, "bas": None
         }
 
         # Salle d'échange au-dessus du magasin
-        magasin_echange.exits = {
+        self.magasin_echange.exits = {
             "N": None, "E": None, "S": None, "O": None,
-            "haut": None, "bas": magasin
+            "haut": None, "bas": self.magasin
         }
 
         # Ancienne maison (au sud du village)
-        maison_ancien.exits = {
-            "N": village, "E": None, "S": None, "O": None,
+        self.maison_ancien.exits = {
+            "N": self.village, "E": None, "S": None, "O": None,
             "haut": None, "bas": None
         }
 
         # Forêt
-        foret.exits = {
-            "N": None, "E": foret_sombre, "S": None, "O": village,
+        self.foret.exits = {
+            "N": None, "E": self.foret_sombre, "S": None, "O": self.village,
             "haut": None, "bas": None
         }
 
         # Forêt sombre
-        foret_sombre.exits = {
-            "N": None, "E": route_capital, "S": None, "O": foret,
+        self.foret_sombre.exits = {
+            "N": None, "E": self.route_capital, "S": None, "O": self.foret,
             "haut": None, "bas": None
         }
 
         # Route vers la capitale
-        route_capital.exits = {
-            "N": None, "E": avant_post_capital, "S": None, "O": foret_sombre,
+        self.route_capital.exits = {
+            "N": None, "E": self.avant_post_capital, "S": None, "O": self.foret_sombre,
             "haut": None, "bas": None
         }
 
         # Avant-poste
-        avant_post_capital.exits = {
-            "N": None, "E": None, "S": rue_capitale, "O": route_capital,
+        self.avant_post_capital.exits = {
+            "N": None, "E": None, "S": self.rue_capitale, "O": self.route_capital,
             "haut": None, "bas": None
         }
 
         # Rue principale de la capitale
-        rue_capitale.exits = {
-            "N": avant_post_capital, "E": magasin_capital,
-            "S": foret_capital, "O": guild,
+        self.rue_capitale.exits = {
+            "N": self.avant_post_capital, "E": self.magasin_capital,
+            "S": self.foret_capital, "O": self.guild,
             "haut": None, "bas": None
         }
 
         # Guild
-        guild.exits = {
-            "N": None, "E": rue_capitale, "S": None, "O": None,
-            "haut": auberge, "bas": None
+        self.guild.exits = {
+            "N": None, "E": self.rue_capitale, "S": None, "O": None,
+            "haut": self.auberge, "bas": None
         }
 
         # Auberge (étage)
-        auberge.exits = {
+        self.auberge.exits = {
             "N": None, "E": None, "S": None, "O": None,
-            "haut": None, "bas": guild
+            "haut": None, "bas": self.guild
         }
 
         # Magasin de la capitale
-        magasin_capital.exits = {
-            "N": None, "E": None, "S": None, "O": rue_capitale,
+        self.magasin_capital.exits = {
+            "N": None, "E": None, "S": None, "O": self.rue_capitale,
             "haut": None, "bas": None
         }
 
         # Forêt capitale
-        foret_capital.exits = {
+        self.foret_capital.exits = {
             "N": None,
             "E": None, "S": None, "O": None,
             "haut": None, "bas": None
         }
 
         # Daungon (sous-sol)
-        daungon.exits = {
+        self.daungon.exits = {
             "N": None, "E": None, "S": None, "O": None,
-            "haut": rue_capitale,
+            "haut": self.rue_capitale,
             "bas": None
         }
 
-        # =========================
-        #  Enregistrer les directions valides (TP)
-        # =========================
-
+    def _register_directions(self):
         for room in self.rooms:
             for direction in room.exits.keys():
                 Room.register_direction(direction)
 
-        # =========================
-        # Setup player and starting room
-        # =========================
-
+    def _setup_player(self):
         self.player = Player(input("\nEntrez votre nom: "))
-        # On commence : à l'étage de la maison
-        self.player.current_room = maison_haut
+        self.player.current_room = self.maison_haut
+        
+    def _setup_quests(self):
+        # --- Quêtes ---
+
+        quete_mere = Quest(
+            title="Parler à maman",
+            description="Va parler à ta mère au rez-de-chaussée.",
+            objectives=["parler avec mere"],
+            reward="cookie",
+        )
+        self.player.quest_manager.add_quest(quete_mere)
+        
+        
+        quete_lieu = Quest(
+            title="Chez l'ancien",
+            description="un crane tout lisse plein de savoir  ",
+            objectives=["aller chez l'ancien"],
+            reward="lait",
+        )
+        self.player.quest_manager.add_quest(quete_lieu)
+
+
+        quete_objet = Quest(
+            title="obtenir la pomme",
+            description="Va chercher la pomme de la mère",
+            objectives=["obtenir la pomme"],
+            reward="cookie",
+        )
+        self.player.quest_manager.add_quest(quete_objet)        
+        
+        
 
     def update_characters(self):
         """
@@ -310,6 +305,16 @@ class Game:
         print("Entrez 'help' si vous avez besoin d'aide.")
         print(self.player.current_room.get_long_description())
     
+    
+    def check_end_game(self):
+        """
+        Vérifie si toutes les quêtes sont terminées.
+        Si oui, termine le jeu avec un message.
+        """
+        if self.player.quest_manager.all_quests_completed():
+            print("\n Félicitations ! Tu as terminé toutes les quêtes !")
+            print(" Tu as gagné le jeu !\n")
+            self.finished = True
 
 def main():
     # Create a game object and play the game
