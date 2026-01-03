@@ -1,8 +1,9 @@
-# Description: The actions module.
+ # Description: The actions module.
 
 from room import Room
 from item import Item
 from player import Player
+from character import *
 
 # The actions module contains the functions that are called when a command is executed.
 # Each function takes 3 parameters:
@@ -499,3 +500,140 @@ class Actions:
             print("\t- " + str(command))
         print()
         return True
+
+    @staticmethod
+    def fight(game, list_of_words, number_of_parameters):
+        if len(list_of_words) != number_of_parameters + 1:
+            print(MSG1.format(command_word=list_of_words[0]))
+            return False
+
+        player = game.player
+        room = player.current_room
+        monster_name = list_of_words[1].lower()
+
+        if monster_name not in room.characters:
+            print(f"\nIl n'y a pas de monstre nommé '{monster_name}' ici.\n")
+            return False
+
+        monster = room.characters[monster_name]
+        if not isinstance(monster, MonsterCharacter):
+            print(f"\n{monster_name} n'est pas un monstre.\n")
+            return False
+        print(f"\n⚔️  Vous engagez le combat contre {monster.name} !\n")
+
+        # Combat simple : player attaque puis le monstre réplique si vivant
+        dmg = monster.take_damage(player.get_attack())
+        print(f"\nVous attaquez {monster.name} et infligez {dmg} dégâts.")
+        print(f"{monster.name} : {monster.display_health_bar()}")
+
+        if monster.is_alive():
+            dmg = monster.attack_player(player)
+            
+            
+        else:
+            print(f"\n{monster.name} est vaincu !")
+            monster.drop_loot()   # Le loot tombe dans la salle
+            del room.characters[monster_name]
+                
+
+        return True
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    @staticmethod
+    def teleport(self, words, number_of_parameters):
+        if len(words) < 2:
+            print("Usage : teleport <salle> ou teleport <entité> <salle>")
+            return
+
+        # Joueur par défaut
+        if len(words) == 2:
+            entity = self.player
+            target_room_name = words[1]
+
+        else:
+            entity_name = words[1].lower()
+            target_room_name = words[2]
+
+            entity = self.player.current_room.characters.get(entity_name)
+            if not entity:
+                print(f"Il n'y a pas de monstre ou PNJ nommé '{entity_name}' ici.")
+                return
+
+        # 🔍 Recherche de la salle
+        target_room = self.get_room_by_name(target_room_name)
+        if not target_room:
+            print(f"La salle '{target_room_name}' n'existe pas.")
+            return
+
+        # Déplacement
+        old_room = entity.current_room
+        key = entity.name.lower()
+
+        if key in old_room.characters:
+            del old_room.characters[key]
+
+        entity.current_room = target_room
+        target_room.characters[key] = entity
+
+        print(f"{entity.name} a été téléporté de {old_room.name} à {target_room.name} !")
