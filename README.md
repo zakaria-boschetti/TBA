@@ -21,6 +21,10 @@ Le jeu repose sur :
 * Python **3.10+**
 * Aucune bibliothèque externe requise (Tkinter est inclus avec Python)
 
+⚠️ Le jeu utilise Tkinter (interface graphique) et ne peut pas être lancé dans un environnement sans affichage
+(comme GitHub Codespaces).  
+Pour jouer, lancez le projet sur votre machine locale!!
+
 ### Lancer le jeu
 
 ```bash
