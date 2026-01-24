@@ -1,0 +1,2169 @@
+# game_gui.py
+# Interface graphique Tkinter pour le moteur du jeu (Game).
+
+import os
+import sys
+import tkinter as tk
+from tkinter import simpledialog, messagebox
+
+from PIL import Image, ImageTk
+
+from game import Game
+from character import MonsterCharacter
+from item import Item
+
+
+class TextRedirector:
+    """Redirige stdout vers un widget Tkinter Text."""
+
+    def __init__(self, text_widget):
+        self.text_widget = text_widget
+
+    def write(self, s):
+        self.text_widget.configure(state="normal")
+        self.text_widget.insert("end", s)
+        self.text_widget.see("end")
+        self.text_widget.configure(state="disabled")
+
+    def flush(self):
+        pass
+
+
+class GameGUI:
+    """Fenêtre principale + rendu de salle + interactions (parler, combattre, prendre)."""
+
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Jeu d'aventure")
+        self.root.resizable(False, False)
+
+        self.in_combat = False
+
+        self.canvas_w = 800
+        self.canvas_h = 600
+
+        self._build_layout()
+
+        player_name = simpledialog.askstring("Nom du joueur", "Entrez votre nom :", parent=self.root)
+        if not player_name:
+            player_name = "Hero"
+
+        self.game = Game()
+        self.game.setup(player_name=player_name)
+        self.game.gui = self
+
+        self._load_assets()
+        self._init_runtime_state()
+        self.in_combat = False
+
+        self.game.print_welcome()
+        self.update_room_view()
+
+    # ------------------------------------------------------------------
+    # UI layout
+    # ------------------------------------------------------------------
+
+    def _build_layout(self):
+        main = tk.Frame(self.root)
+        main.pack(padx=10, pady=10)
+
+        left = tk.Frame(main)
+        left.grid(row=0, column=0, sticky="n")
+
+        right = tk.Frame(main)
+        right.grid(row=0, column=1, padx=(10, 0), sticky="n")
+
+        self.canvas = tk.Canvas(left, width=self.canvas_w, height=self.canvas_h, highlightthickness=0, bd=0)
+        self.canvas.grid(row=0, column=0)
+
+        terminal_frame = tk.Frame(right)
+        terminal_frame.grid(row=0, column=0, sticky="n")
+
+        self.text = tk.Text(terminal_frame, width=65, height=28, state="disabled")
+        self.text.pack()
+
+        sys.stdout = TextRedirector(self.text)
+
+        controls = tk.Frame(right)
+        controls.grid(row=1, column=0, pady=(8, 0), sticky="n")
+
+        nav = tk.Frame(controls)
+        nav.pack(pady=(0, 8))
+
+        tk.Button(nav, text="Nord", width=10, command=lambda: self.move("N")).grid(row=0, column=1, padx=4, pady=4)
+        tk.Button(nav, text="Ouest", width=10, command=lambda: self.move("O")).grid(row=1, column=0, padx=4, pady=4)
+        tk.Button(nav, text="Est", width=10, command=lambda: self.move("E")).grid(row=1, column=2, padx=4, pady=4)
+        tk.Button(nav, text="Sud", width=10, command=lambda: self.move("S")).grid(row=2, column=1, padx=4, pady=4)
+        tk.Button(nav, text="Monter", width=10, command=lambda: self.move("haut")).grid(row=0, column=3, padx=4, pady=4)
+        tk.Button(nav, text="Descendre", width=10, command=lambda: self.move("bas")).grid(row=1, column=3, padx=4, pady=4)
+
+        actions = tk.Frame(controls)
+        actions.pack(pady=(0, 6))
+
+        tk.Button(actions, text="Observer", width=12, command=self.observe_room).grid(row=0, column=0, padx=4, pady=4)
+        tk.Button(actions, text="Prendre", width=12, command=self.take_item_gui).grid(row=0, column=1, padx=4, pady=4)
+        tk.Button(actions, text="Déposer", width=12, command=self.drop_item_gui).grid(row=0, column=2, padx=4, pady=4)
+
+        misc = tk.Frame(controls)
+        misc.pack(pady=(0, 6))
+
+        tk.Button(misc, text="Inventaire", width=12, command=self.open_inventory_window).grid(row=0, column=0, padx=4, pady=4)
+        tk.Button(misc, text="Quêtes", width=12, command=self.show_quests).grid(row=0, column=1, padx=4, pady=4)
+        tk.Button(misc, text="Quitter", width=12, command=self.root.destroy).grid(row=0, column=2, padx=4, pady=4)
+
+        # --- Barre de commande ---
+        cmd_frame = tk.Frame(controls)
+        cmd_frame.pack(pady=(6, 0), fill="x")
+
+        tk.Label(cmd_frame, text="Commande :", anchor="w").pack(fill="x")
+
+        row = tk.Frame(cmd_frame)
+        row.pack(fill="x")
+
+        self.cmd_entry = tk.Entry(row, width=36)
+        self.cmd_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        send_btn = tk.Button(row, text="Envoyer", width=10, command=self.send_command_from_entry)
+        send_btn.pack(side="right")
+
+        # Entrée clavier = envoyer
+        self.cmd_entry.bind("<Return>", lambda e: self.send_command_from_entry())
+
+        # Focus direct sur la barre de commande
+        self.root.after(100, lambda: self.cmd_entry.focus_set())
+
+
+    # ------------------------------------------------------------------
+    # Assets
+    # ------------------------------------------------------------------
+
+    def load_image(self, path, max_size=(800, 600)):
+        """Charge une image avec un chemin fiable.
+
+        ✅ Fix principal : avant, les chemins étaient relatifs au dossier courant.
+        Donc si tu lances le jeu depuis un autre dossier, `images/...` n'existe plus
+        et TOUTES les images deviennent None.
+        """
+
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        full_path = path
+        if not os.path.isabs(path):
+            full_path = os.path.join(base_dir, path)
+
+        if not os.path.exists(full_path):
+            # On log dans le terminal Tk (stdout redirigé)
+            print(f"[WARN] Image introuvable: {full_path}")
+            return None
+
+        try:
+            img = Image.open(full_path).convert("RGBA")
+            img.thumbnail(max_size, Image.LANCZOS)
+            return ImageTk.PhotoImage(img)
+        except Exception as e:
+            print(f"[WARN] Impossible de charger l'image {full_path}: {e}")
+            return None
+
+    def _load_assets(self):
+        self.room_images = {
+            "maison_haut": self.load_image("images/maison_haut.png", max_size=(800, 600)),
+            "maison_bas": self.load_image("images/maison_bas.png", max_size=(800, 600)),
+            "village": self.load_image("images/village.png", max_size=(800, 600)),
+            "magasin_village": self.load_image("images/magasin_village.png", max_size=(800, 600)),
+            "magasin_echange_village": self.load_image("images/magasin_echange_village.png", max_size=(800, 600)),
+            
+            "maison_ancien": self.load_image("images/maison_ancien.png", max_size=(800, 600)),
+            "foret": self.load_image("images/foret.png", max_size=(800, 600)),
+            "foret_sombre": self.load_image("images/foret_sombre.png", max_size=(800,600)),
+            "route_capitale": self.load_image("images/route_capitale.png", max_size=(800,600)),
+            "avant_post_capitale": self.load_image("images/avant_post_capitale.png", max_size=(800, 600)),
+            "foret_capitale": self.load_image("images/foret_capitale.png", max_size=(800, 600)),
+            "rue_capitale": self.load_image("images/rue_capitale.png", max_size=(800, 600)),
+            "guild": self.load_image("images/guild.png", max_size=(800, 600)),
+            "auberge": self.load_image("images/auberge.png", max_size=(800, 600)),
+
+
+            "donjon": self.load_image("donjon/donjon.png", max_size=(800, 600)),
+            "salle_donjon_1": self.load_image("donjon/salle_donjon_1.png", max_size=(800, 600)),
+            "salle_chambre_abandonnee": self.load_image("donjon/salle_chambre_abandonnee.png", max_size=(800, 600)),
+            "salle_tunnel_etroit": self.load_image("donjon/salle_tunnel_etroit.png", max_size=(800, 600)),
+            "salle_exploration": self.load_image("donjon/salle_exploration.png", max_size=(800, 600)),
+
+            "salle_donjon_2": self.load_image("donjon/salle_donjon_2.png", max_size=(800, 600)),
+            "salle_caverne_humide": self.load_image("donjon/salle_caverne_humide.png", max_size=(800, 600)),
+            "salle_galerie_sombre": self.load_image("donjon/salle_galerie_sombre.png", max_size=(800, 600)),
+            "salle_aux_cristaux": self.load_image("donjon/salle_aux_cristaux.png", max_size=(800, 600)),
+
+            "salle_donjon_4": self.load_image("donjon/salle_donjon_4.png", max_size=(800, 600)),
+            "salle_araignee": self.load_image("donjon/salle_araignee.png", max_size=(800, 600)),
+            "salle_puits": self.load_image("donjon/salle_puits.png", max_size=(800, 600)),
+            "salle_lanternes": self.load_image("donjon/salle_lanternes.png", max_size=(800, 600)),
+
+            "salle_donjon_5": self.load_image("donjon/salle_donjon_5.png", max_size=(800, 600)),
+            "salle_feu": self.load_image("donjon/salle_feu.png", max_size=(800, 600)),
+            "salle_chaines": self.load_image("donjon/salle_chaines.png", max_size=(800, 600)),
+            "salle_pierres": self.load_image("donjon/salle_pierres.gif", max_size=(800, 600)),
+
+            "salle_boss": self.load_image("donjon/salle_boss.jpg", max_size=(800, 600)),
+
+            "salle_exploration": self.load_image("donjon/salle_exploration.png", max_size=(800, 600)),
+
+            "donjon3_depart": self.load_image("images/labyrinthe.png", max_size=(800, 600)),
+            "donjon3_arrivee": self.load_image("images/labyrinthe.png", max_size=(800, 600)),
+            "donjon3_s1": self.load_image("images/labyrinthe.png", max_size=(800, 600)),
+            "donjon3_s2": self.load_image("images/labyrinthe.png", max_size=(800, 600)),
+            "donjon3_s3": self.load_image("images/labyrinthe.png", max_size=(800, 600)),
+            "donjon3_s4": self.load_image("images/labyrinthe.png", max_size=(800, 600)),
+            "donjon3_s5": self.load_image("images/labyrinthe.png", max_size=(800, 600)),
+            "donjon3_s6": self.load_image("images/labyrinthe.png", max_size=(800, 600)),
+            "donjon3_s7": self.load_image("images/labyrinthe.png", max_size=(800, 600)),
+            "donjon3_s8": self.load_image("images/labyrinthe.png", max_size=(800, 600)),
+            "donjon3_s9": self.load_image("images/labyrinthe.png", max_size=(800, 600)),
+            "donjon3_s10": self.load_image("images/labyrinthe.png", max_size=(800, 600)),
+            "donjon3_s11": self.load_image("images/labyrinthe.png", max_size=(800, 600)),
+            "donjon3_s12": self.load_image("images/labyrinthe.png", max_size=(800, 600)),
+            "donjon3_s13": self.load_image("images/labyrinthe.png", max_size=(800, 600)),
+            "donjon3_s14": self.load_image("images/labyrinthe.png", max_size=(800, 600)),
+            "donjon3_s15": self.load_image("images/labyrinthe.png", max_size=(800, 600)),
+        }
+
+        self.npc_images = {
+            "mere": self.load_image("images/mere.png", max_size=(150, 150)),
+            "ancien": self.load_image("images/ancien.GIF", max_size=(150, 150)),
+            "marchand": self.load_image("images/marchand.png", max_size=(150, 150)),
+            "vendeur": self.load_image("images/echange_village.png", max_size=(150, 150)),
+            "marchand_ambulant": self.load_image("images/marchand_ambulant.png", max_size=(150, 150)),
+            
+            "forgeron": self.load_image("images/forgeron.png", max_size=(150, 150)),
+            "aubergiste": self.load_image("images/aubergiste.png", max_size=(150, 150)),
+            "mage": self.load_image("images/mage.png", max_size=(150, 150)),
+            "herboriste": self.load_image("images/herboriste.png", max_size=(150, 150)),
+            "villageois": self.load_image("images/villageois.png", max_size=(150, 150)),
+            "guard_village" : self.load_image("images/guard_village.gif", max_size=(150, 150)),
+            
+            "marchand_guilde" : self.load_image("images/marchand_guilde.gif", max_size=(150, 150)),
+            "echangeur_auberge" : self.load_image("images/echangeur_auberge.gif", max_size=(150, 150))
+        }
+
+        self.npc_tete_images = {
+            "mere": self.load_image("images/mere_tete.png", max_size=(220, 220)),
+            "ancien": self.load_image("images/ancien_tete.png", max_size=(220, 220)),
+            "marchand": self.load_image("images/marchand_tete.png", max_size=(220, 220)),
+            "forgeron": self.load_image("images/forgeron_tete.png", max_size=(220, 220)),
+            "aubergiste": self.load_image("images/aubergiste_tete.png", max_size=(220, 220)),
+            "mage": self.load_image("images/mage_tete.png", max_size=(220, 220)),
+            "herboriste": self.load_image("images/herboriste_tete.png", max_size=(220, 220)),
+            "villageois": self.load_image("images/villageois_tete.png", max_size=(220, 220)),
+            "guard_village" : self.load_image("images/guard_village_tete.png", max_size=(220, 220))
+        }
+
+        self.monster_images = {
+            "gobelin": self.load_image("images/gobelin.png", max_size=(150, 150)),
+            "hobelin": self.load_image("images/hobelin.png", max_size=(150, 150)),
+            "bandit": self.load_image("images/bandit.png", max_size=(150, 150)),
+            # Scénario forêt sombre / route vers la capitale
+            "squelettes": self.load_image("images/squelettes.png", max_size=(150, 150)),
+            "bandits": self.load_image("images/bandits.png", max_size=(150, 150)),
+            "slime": self.load_image("images/slime.png", max_size=(150, 150)),
+            "golem": self.load_image("images/golem.png", max_size=(150, 150)),
+            "furie_nocturne": self.load_image("images/furie_nocturne.png", max_size=(150, 150)),
+
+            "pet_enfer": self.load_image("monstres/pet_enfer.png", max_size=(150, 150)),
+            "enfer_boss": self.load_image("monstres/enfer_boss.png", max_size=(150, 150)),
+            "enfer_boss_1": self.load_image("monstres/enfer_boss_1.png", max_size=(150, 150)),
+            "mage_enfer": self.load_image("monstres/mage_enfer.png", max_size=(150, 150)),
+
+            "trolle": self.load_image("monstres/trolle.png", max_size=(150, 150)),
+            "chevre_humaine": self.load_image("monstres/chevre_humaine.png", max_size=(150, 150)),
+            "oeil_enfer": self.load_image("monstres/oeil_enfer.png", max_size=(150, 150)),
+
+            "zombie": self.load_image("monstres/zombie.png", max_size=(150, 150)),
+            "zombie_evoluer": self.load_image("monstres/zombie_evoluer.png", max_size=(150, 150)),
+            "horde_zombie": self.load_image("monstres/horde_zombie.png", max_size=(150, 150)),
+
+            "crane_feu": self.load_image("monstres/crane_feu.png", max_size=(150, 150)),
+            "homme_feu": self.load_image("monstres/homme_feu.png", max_size=(150, 150)),
+
+            "golem_feu": self.load_image("monstres/golem_feu.png", max_size=(150, 150)),
+            "golem_glace": self.load_image("monstres/golem_glace.png", max_size=(150, 150)),
+            "golem_bois": self.load_image("monstres/golem_bois.png", max_size=(150, 150)),
+            "golem_meca": self.load_image("monstres/golem_meca.png", max_size=(150, 150)),
+
+            "mega_golem_feu": self.load_image("monstres/mega_golem_feu.png", max_size=(150, 150)),
+            "mega_golem_glace": self.load_image("monstres/mega_golem_glace.png", max_size=(150, 150)),
+            "mega_golem_bois": self.load_image("monstres/mega_golem_bois.png", max_size=(150, 150)),
+
+            "phoenix": self.load_image("monstres/phoenix.png", max_size=(150, 150)),
+
+            "serpent": self.load_image("monstres/serpent.png", max_size=(150, 150)),
+            "serpent_feu": self.load_image("monstres/serpent_feu.png", max_size=(150, 150)),
+            "serpent_glace": self.load_image("monstres/serpent_glace.png", max_size=(150, 150)),
+
+            "corbeau": self.load_image("monstres/corbeau.png", max_size=(150, 150)),
+            "coffre_piege": self.load_image("monstres/coffre_piege.png", max_size=(150, 150)),
+
+            "demon": self.load_image("monstres/demon.png", max_size=(150, 150)),
+            "demone": self.load_image("monstres/demone.png", max_size=(150, 150)),
+
+            "fantome": self.load_image("monstres/fantome.png", max_size=(150, 150)),
+            "fantome_boss": self.load_image("monstres/fantome_boss.png", max_size=(150, 150)),
+            "fantome_mage": self.load_image("monstres/fantome_mage.png", max_size=(150, 150)),
+
+            "gargouille": self.load_image("monstres/gargouille.png", max_size=(150, 150)),
+
+            "goblin_combat": self.load_image("monstres/goblin_combat.png", max_size=(150, 150)),
+            "goblin_ingi": self.load_image("monstres/goblin_ingi.png", max_size=(150, 150)),
+            "goblin_mage": self.load_image("monstres/goblin_mage.png", max_size=(150, 150)),
+
+            "orc": self.load_image("monstres/orc.png", max_size=(150, 150)),
+            "orc_glace": self.load_image("monstres/orc_glace.png", max_size=(150, 150)),
+            "orc_shaman": self.load_image("monstres/orc_shaman.png", max_size=(150, 150)),
+
+            "slime_eau": self.load_image("monstres/slime_eau.png", max_size=(150, 150)),
+            "slime_feu": self.load_image("monstres/slime_feu.png", max_size=(150, 150)),
+            "slime_nature": self.load_image("monstres/slime_nature.png", max_size=(150, 150)),
+
+            "squelette_feu": self.load_image("monstres/squelette_feu.png", max_size=(150, 150)),
+            "squelette_mage": self.load_image("monstres/squelette_mage.png", max_size=(150, 150)),
+            "squelette_shaman": self.load_image("monstres/squelette_shaman.png", max_size=(150, 150)),
+
+            "kraken": self.load_image("monstres/kraken.png", max_size=(150, 150)),
+            "kraken_glace": self.load_image("monstres/kraken_glace.png", max_size=(150, 150)),
+            
+            "gargouille_giante": self.load_image("monstres/gargouille_giante.png", max_size=(150, 150)),
+            
+            "orc_glasse": self.load_image("monstres/orc_glasse.png", max_size=(150, 150)),
+        }
+
+        self.item_images = {
+            "b_f_sword": self.load_image("images/B_F_Sword.png", max_size=(64, 64)),
+            "long_sword": self.load_image("images/Long_Sword.png", max_size=(64, 64)),
+            "caulfields_warhammer": self.load_image("images/Caulfields_Warhammer.png", max_size=(64, 64)),
+            "serrated_dirk": self.load_image("images/Serrated_Dirk.png", max_size=(64, 64)),
+            "hearthbound_axe": self.load_image("images/Hearthbound_Axe.png", max_size=(64, 64)),
+            "glacial_buckler": self.load_image("images/Glacial_Buckler.png", max_size=(64, 64)),
+            "bramble_vest": self.load_image("images/Bramble_Vest.png", max_size=(64, 64)),
+            "winged_moonplate": self.load_image("images/Winged_Moonplate.png", max_size=(64, 64)),
+            "sheen": self.load_image("images/Sheen.png", max_size=(64, 64)),
+            "zeal": self.load_image("images/Zeal.png", max_size=(64, 64)),
+            "rod_of_ages": self.load_image("images/Rod_of_Ages.png", max_size=(64, 64)),
+            "pomme": self.load_image("images/pomme.png", max_size=(100, 100)),
+            "depart": self.load_image("images/depart.png", max_size=(300, 300)),
+            "potion_soin": self.load_image("images/potion.png", max_size=(100, 100)),
+            "noyau": self.load_image("images/noyau.png", max_size=(120, 120)),
+
+        }
+
+        self.dialog_bubble = self.load_image("images/bulle_dialogue.png", max_size=(800, 600))
+        self.hero_portrait = self.load_image("images/hero_tete.png", max_size=(250, 250))
+
+        self.inventory_bg = self.load_image("images/inventaire.png", max_size=(800, 600))
+
+        self.inventory_item_images = {
+            "b_f_sword": self.load_image("images/B_F_Sword.png", max_size=(64, 64)),
+            "long_sword": self.load_image("images/Long_Sword.png", max_size=(64, 64)),
+            "caulfields_warhammer": self.load_image("images/Caulfields_Warhammer.png", max_size=(64, 64)),
+            "serrated_dirk": self.load_image("images/Serrated_Dirk.png", max_size=(64, 64)),
+            "hearthbound_axe": self.load_image("images/Hearthbound_Axe.png", max_size=(64, 64)),
+            "glacial_buckler": self.load_image("images/Glacial_Buckler.png", max_size=(64, 64)),
+            "bramble_vest": self.load_image("images/Bramble_Vest.png", max_size=(64, 64)),
+            "winged_moonplate": self.load_image("images/Winged_Moonplate.png", max_size=(64, 64)),
+            "sheen": self.load_image("images/Sheen.png", max_size=(64, 64)),
+            "zeal": self.load_image("images/Zeal.png", max_size=(64, 64)),
+            "rod_of_ages": self.load_image("images/Rod_of_Ages.png", max_size=(64, 64)),
+            "pomme": self.load_image("images/pomme.png", max_size=(64, 64)),
+            "depart": self.load_image("images/depart.png", max_size=(64, 64)),
+            "potion_soin": self.load_image("images/potion.png", max_size=(64, 10640)),
+            "noyau": self.load_image("images/noyau.png", max_size=(64, 64)),
+        }
+
+        # --- Assets boutique / inventaire (facultatifs si les images n'existent pas) ---
+        self.shop_bg = self.load_image("images/shop_bg.png", max_size=(800, 600))
+        self.shop_bgg = self.load_image("images/shop_bgg.png", max_size=(1100, 800))
+        self.inventory_bg = self.load_image("images/inventaire.png", max_size=(800, 600))
+    
+        self.shop_item_images = {
+            "b_f_sword": self.load_image("images/b_f_sword.png", max_size=(120, 120)),
+            "bramble_vest": self.load_image("images/bramble_vest.png", max_size=(120, 120)),
+            "caulfields_warhammer": self.load_image("images/caulfields_warhammer.png", max_size=(120, 120)),
+            "glacial_buckler": self.load_image("images/glacial_buckler.png", max_size=(120, 120)),
+            "serrated_dirk": self.load_image("images/serrated_dirk.png", max_size=(120, 120)),
+            "sheen": self.load_image("images/sheen.png", max_size=(120, 120)),
+            "zeal": self.load_image("images/zeal.png", max_size=(120, 120)),
+        }
+
+        self.monster_images.update({
+            "squelettes": self.load_image("images/squelettes.png", max_size=(150, 150)),
+            "bandits": self.load_image("images/bandits.png", max_size=(200, 200)),
+        })
+
+        self.hero = self.load_image("images/hero.png", max_size=(220, 220))
+        self.hero_portrait = self.load_image("images/hero_tete.png", max_size=(220, 220))
+        self.game_over_image = self.load_image("images/game_over.png", max_size=(800, 600))
+
+
+    # ------------------------------------------------------------------
+    # Runtime state for canvas objects
+    # ------------------------------------------------------------------
+
+    def _init_runtime_state(self):
+        self.npc_positions = {
+            "maison_bas": {"mere": (100, 380)},
+            "maison_ancien": {"ancien": (130, 360)},
+            "magasin_village": {"marchand": (350, 310)},
+            "auberge": {"aubergiste": (150, 410),"echangeur_auberge": (350, 310)},
+            "guild": {"mage": (150, 410),"marchand_guilde": (350, 310)},
+            "village": {"villageois": (160, 430), "guard_village": (520, 470) , "herboriste": (250, 310)},
+            # le marchand ambulant apparaît ici (après l'embuscade des squelettes)
+            "foret_sombre": {"marchand_ambulant": (160, 430)},
+        }
+
+        self.monster_positions = {
+            "foret": {"gobelin": (520, 360), "hobelin": (650, 420)},
+            "foret": {"bandit": (299, 200)},
+            "donjon_1": {"slime": (520, 360)},
+            "donjon_3_salle_2": {"golem": (520, 360)},
+            "donjon_boss": {"furie_nocturne": (520, 360)},
+            "foret_sombre": {"squelettes": (400, 350)},
+            "route_capitale": {"bandits": (400, 350)},
+        }
+
+        self.item_positions = {
+            "donjon3_depart": {"depart": (250, 150)},
+        }
+
+        self.canvas_refs = []
+
+    # ------------------------------------------------------------------
+    # Core actions (GUI -> engine)
+    # ------------------------------------------------------------------
+
+    def run_command(self, cmd):
+        if getattr(self.game, "finished", False):
+            return
+        self.game.process_command(cmd)
+        if hasattr(self.game, "check_game_over"):
+            self.game.check_game_over()
+        if hasattr(self.game, "check_end_game"):
+            self.game.check_end_game()
+        self.update_room_view()
+        if hasattr(self, "cmd_entry"):
+            self.cmd_entry.focus_set()
+    
+    def send_command_from_entry(self):
+        cmd = self.cmd_entry.get().strip()
+        if not cmd:
+            return
+        self.cmd_entry.delete(0, "end")
+        self.run_command(cmd)
+
+
+    def move(self, direction):
+        self.run_command(f"go {direction}")
+
+    def observe_room(self):
+        self.run_command("look")
+
+    def take_item_gui(self):
+        room = self.game.player.current_room
+        if not room.inventory:
+            messagebox.showinfo("Prendre", "Aucun objet à prendre ici.")
+            return
+
+        choices = list(room.inventory.keys())
+        target = simpledialog.askstring("Prendre", "Nom de l'objet à prendre :\n" + ", ".join(choices), parent=self.root)
+        if not target:
+            return
+        self.run_command(f"take {target}")
+
+    def drop_item_gui(self):
+        inv = getattr(self.game.player, "inventory", {})
+        names = list(inv.keys()) if isinstance(inv, dict) else []
+        if not names:
+            messagebox.showinfo("Déposer", "Inventaire vide.")
+            return
+
+        target = simpledialog.askstring("Déposer", "Nom de l'objet à déposer :\n" + ", ".join(names), parent=self.root)
+        if not target:
+            return
+        self.run_command(f"drop {target}")
+
+    # ------------------------------------------------------------------
+    # Canvas rendering
+    # ------------------------------------------------------------------
+
+    def update_room_view(self):
+        self.canvas.delete("all")
+        self.canvas_refs.clear()
+
+        room = self.game.player.current_room
+        room_name = room.name
+
+        def norm(s: str) -> str:
+            return str(s).lower().strip()
+
+        # --- Choix du fond (avec alias) ---
+        # mais tes images sont mappées sur des clés plus simples.
+        bg_key = room_name
+        rn = norm(room_name)
+        if rn == "magasin_echange_village":
+            bg_key = "magasin_echange_village"
+        bg = self.room_images.get(bg_key)
+        if bg is not None:
+            self.canvas.create_image(self.canvas_w // 2, self.canvas_h // 2, image=bg)
+            self.canvas_refs.append(bg)
+        else:
+            self.canvas.create_rectangle(0, 0, self.canvas_w, self.canvas_h, fill="black", outline="black")
+            self.canvas.create_text(
+                self.canvas_w // 2,
+                self.canvas_h // 2,
+                text=f"{room_name}\n[fond manquant: {bg_key}]",
+                fill="white",
+                font=("Arial", 18, "bold"),
+            )
+
+        # Items fixes (décor ou items importants)
+        fixed_items = self.item_positions.get(room_name, {})
+        for item_name, (x, y) in fixed_items.items():
+            img = self.item_images.get(item_name)
+            if img is not None:
+                self.canvas.create_image(x, y, image=img)
+                self.canvas_refs.append(img)
+            else:
+                self.canvas.create_text(x, y, text=item_name, fill="white")
+
+            self._bind_click_zone(x, y, item_name, kind="item")
+
+        # --- Placement auto si une entité n'a pas de position prédéfinie ---
+        auto_npc_slots = [(140, 420), (260, 430), (160, 340), (320, 360)]
+        auto_monster_slots = [(560, 420), (650, 360), (520, 330), (680, 440)]
+        auto_item_slots = [(650, 520), (720, 520), (580, 520), (650, 470), (720, 470)]
+        used_npc = 0
+        used_monsters = 0
+
+        # Personnages / monstres depuis room.characters
+        for key, char in room.characters.items():
+            name_key = key.lower()
+
+            if isinstance(char, MonsterCharacter):
+                pos = self.monster_positions.get(room_name, {}).get(name_key, None)
+                if pos is None:
+                    pos = auto_monster_slots[min(used_monsters, len(auto_monster_slots) - 1)]
+                    used_monsters += 1
+                img = self.monster_images.get(name_key)
+                if img is not None:
+                    self.canvas.create_image(pos[0], pos[1], image=img)
+                    self.canvas_refs.append(img)
+                else:
+                    self.canvas.create_text(pos[0], pos[1], text=name_key, fill="white")
+                self._bind_click_zone(pos[0], pos[1], name_key, kind="monster")
+            else:
+                pos = self.npc_positions.get(room_name, {}).get(name_key, None)
+                if pos is None:
+                    pos = auto_npc_slots[min(used_npc, len(auto_npc_slots) - 1)]
+                    used_npc += 1
+                img = self.npc_images.get(name_key)
+                if img is not None:
+                    self.canvas.create_image(pos[0], pos[1], image=img)
+                    self.canvas_refs.append(img)
+                else:
+                    self.canvas.create_text(pos[0], pos[1], text=name_key, fill="white")
+                self._bind_click_zone(pos[0], pos[1], name_key, kind="npc")
+
+        # Items au sol (room.inventory)
+        used_items = 0
+        for item_name, item_obj in room.inventory.items():
+            if item_name in fixed_items:
+                continue
+            pos = self.item_positions.get(room_name, {}).get(item_name)
+            if pos is None:
+                pos = auto_item_slots[min(used_items, len(auto_item_slots) - 1)]
+                used_items += 1
+
+            img = self.item_images.get(item_name)
+            if img is not None:
+                self.canvas.create_image(pos[0], pos[1], image=img)
+                self.canvas_refs.append(img)
+            else:
+                self.canvas.create_text(pos[0], pos[1], text=item_name, fill="white", font=("Arial", 12, "bold"))
+            self._bind_click_zone(pos[0], pos[1], item_name, kind="item")
+
+    def _bind_click_zone(self, x, y, name, kind):
+        r = 45
+        zone = self.canvas.create_rectangle(x - r, y - r, x + r, y + r, outline="", fill="")
+        if kind == "npc":
+            self.canvas.tag_bind(zone, "<Button-1>", lambda e, n=name: self.on_click_npc(n))
+        elif kind == "monster":
+            self.canvas.tag_bind(zone, "<Button-1>", lambda e, n=name: self.on_click_monster(n))
+
+        elif kind == "item":
+            self.canvas.tag_bind(zone, "<Button-1>", lambda e, n=name: self.on_click_item(n))
+
+    def _draw_text_item(self, item_name):
+        x, y = 650, 520
+        self.canvas.create_text(x, y, text=item_name, fill="white", font=("Arial", 12, "bold"))
+        self._bind_click_zone(x, y, item_name, kind="item")
+
+    def on_click_npc(self, npc_name):
+        self.run_command(f"talk {npc_name}")
+
+    def on_click_monster(self, monster_name):
+        self.run_command(f"fight {monster_name}")
+
+    def on_click_item(self, item_name):
+        self.run_command(f"take {item_name}")
+
+    def open_npc_dialogue(self, portrait_key, title_line, first_message, choices, replies):
+        """
+        Fenêtre de dialogue PNJ en 3 étapes EXACTEMENT comme ton ancien code :
+        1) Message du PNJ + bouton Continuer
+        2) Choix du joueur (3 boutons)
+        3) Réponse du PNJ + bouton Fermer
+
+        - portrait_key : clé dans self.npc_images (ex: "mere", "ancien", ...)
+        - title_line   : ex "LA MÈRE :" / "L'ANCIEN :"
+        - first_message: message initial PNJ (sans le titre)
+        - choices      : liste de 3 choix joueur
+        - replies      : liste de 3 réponses PNJ
+        """
+
+        win = tk.Toplevel(self.root)
+        win.title("Discussion")
+        win.geometry("800x600")
+        win.resizable(False, False)
+        win.configure(bg="black")
+
+        # images
+        npc_portrait = self.npc_tete_images.get(portrait_key)
+        bubble = self.dialog_bubble
+        hero_portrait = self.hero_portrait
+
+        bubble_w = bubble.width() if bubble else 800
+        bubble_h = bubble.height() if bubble else 600
+
+        main = tk.Frame(win, bg="black")
+        main.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(
+            main,
+            width=bubble_w,
+            height=bubble_h,
+            bg="black",
+            highlightthickness=0,
+            bd=0,
+        )
+        canvas.pack(side="bottom")
+
+        if bubble:
+            canvas.create_image(bubble_w // 2, bubble_h // 2, image=bubble)
+            canvas.bubble = bubble  # éviter GC
+
+        text_id = canvas.create_text(
+            bubble_w // 2,
+            int(bubble_h * 0.70),
+            text="",
+            fill="white",
+            font=("Arial", 12, "bold"),
+            width=int(bubble_w * 0.80),
+            anchor="center",
+        )
+
+        def set_text(msg: str):
+            canvas.itemconfig(text_id, text=msg)
+
+        # Portrait (à gauche comme dans ton ancien code)
+        portrait_label = tk.Label(main, image=npc_portrait, bg="black")
+        portrait_label.place(x=80, y=216)
+
+        # garder refs
+        win.npc_portrait = npc_portrait
+        win.hero_portrait = hero_portrait
+        win.portrait_label = portrait_label
+        win.choice_buttons = []
+
+        # ---------------------------
+        # ÉTAPE 1 : message PNJ
+        # ---------------------------
+        set_text("\n\n\n" + title_line + "\n" + first_message)
+
+        def aller_aux_choix():
+            btn_continuer.destroy()
+            afficher_choix()
+
+        btn_continuer = tk.Button(
+            main,
+            text="Continuer",
+            command=aller_aux_choix,
+            bg="#666666",
+            fg="white",
+            font=("Arial", 10, "bold"),
+            width=12,
+        )
+        btn_continuer.place(x=650, y=540)
+
+        # ---------------------------
+        # ÉTAPE 2 : choix du joueur
+        # ---------------------------
+        def afficher_choix():
+            # portrait HERO
+            if hero_portrait:
+                portrait_label.configure(image=hero_portrait)
+
+            set_text("Que réponds-tu ?")
+
+            positions = [(80, 470), (80, 500), (80, 530)]
+            # On force 3 choix max pour coller à ton ancien code
+            for i, (txt, (x, y)) in enumerate(zip(choices[:3], positions)):
+                btn = tk.Button(
+                    main,
+                    text=txt,
+                    command=lambda idx=i: choix_valide(idx),
+                    wraplength=640,
+                    justify="left",
+                    bg="#777777",
+                    fg="white",
+                    font=("Arial", 10, "bold"),
+                    relief="raised",
+                    bd=3,
+                    anchor="w",
+                    width=70,
+                )
+                btn.place(x=x, y=y)
+                win.choice_buttons.append(btn)
+
+        # ---------------------------
+        # ÉTAPE 3 : réponse du PNJ
+        # ---------------------------
+        def choix_valide(index):
+            for b in win.choice_buttons:
+                b.destroy()
+            win.choice_buttons.clear()
+
+            # portrait PNJ
+            if npc_portrait:
+                portrait_label.configure(image=npc_portrait)
+
+            rep = replies[index] if index < len(replies) else ""
+            set_text("\n\n\n\n\n\n" + title_line + "\n" + rep)
+
+            btn_fin = tk.Button(
+                main,
+                text="Fermer",
+                command=win.destroy,
+                bg="#666666",
+                fg="white",
+                font=("Arial", 10, "bold"),
+                width=12,
+            )
+            btn_fin.place(x=650, y=540)
+
+
+
+    # ------------------------------------------------------------------
+    # Inventory / quests
+    # ------------------------------------------------------------------
+
+
+    def open_inventory_window(self):
+        """Fenêtre d'inventaire avec fond inventaire.png, slots + équipement (style ancien)."""
+
+        player = self.game.player
+
+        win = tk.Toplevel(self.root)
+        win.title("Inventaire")
+        win.geometry("800x600")
+        win.resizable(False, False)
+        win.configure(bg="black")
+
+        # fond
+        win.inventory_bg = getattr(self, "inventory_bg", None)
+
+        canvas = tk.Canvas(
+            win,
+            width=800,
+            height=600,
+            bg="black",
+            highlightthickness=0,
+            bd=0,
+        )
+        canvas.pack(fill="both", expand=True)
+
+        if win.inventory_bg is not None:
+            canvas.create_image(400, 300, image=win.inventory_bg)
+        else:
+            canvas.create_rectangle(0, 0, 800, 600, fill="black", outline="black")
+            canvas.create_text(400, 40, text="INVENTAIRE (fond manquant: images/inventaire.png)", fill="white")
+
+        # -----------------------------
+        # Helpers: récupérer items sac
+        # -----------------------------
+        inv = getattr(player, "inventory", {})
+        if isinstance(inv, dict):
+            bag_items = list(inv.values())
+        else:
+            # si c'est une liste
+            bag_items = list(inv)
+
+        # -----------------------------
+        # Zone stats (comme ton ancien)
+        # (on affiche si les attributs existent)
+        # -----------------------------
+        def safe_get(attr, default=0):
+            return getattr(player, attr, default)
+
+        # Or
+        stats_frame = tk.Frame(canvas, bg="white")
+        tk.Label(stats_frame, text=f"{safe_get('gold', 0)}",
+                fg="black", bg="white", font=("Arial", 10, "bold")).pack(anchor="w")
+        canvas.create_window(615, 153, window=stats_frame)
+
+        # Niveau
+        stats_frame = tk.Frame(canvas, bg="white")
+        tk.Label(stats_frame, text=f"{safe_get('level', 1)}",
+                fg="black", bg="white", font=("Arial", 11, "bold")).pack(anchor="w")
+        canvas.create_window(610, 220, window=stats_frame)
+
+        # XP
+        stats_frame = tk.Frame(canvas, bg="white")
+        tk.Label(stats_frame, text=f"{safe_get('xp', 0)} / {safe_get('xp_to_next', 0)} XP",
+                fg="black", bg="white", font=("Arial", 10)).pack(anchor="w")
+        canvas.create_window(615, 240, window=stats_frame)
+
+        # HP
+        stats_frame = tk.Frame(canvas, bg="white")
+        tk.Label(stats_frame, text=f"{safe_get('hp', 0)} / {safe_get('max_hp', 0)}",
+                fg="black", bg="white", font=("Arial", 10)).pack(anchor="w")
+        canvas.create_window(615, 323, window=stats_frame)
+
+        # Attack / Magic / Armor (si tu utilises d'autres noms, adapte)
+        stats_frame = tk.Frame(canvas, bg="white")
+        tk.Label(stats_frame, text=f"{safe_get('attack', safe_get('atk', 0))}",
+                fg="black", bg="white", font=("Arial", 10)).pack(anchor="w")
+        canvas.create_window(610, 407, window=stats_frame)
+
+        stats_frame = tk.Frame(canvas, bg="white")
+        tk.Label(stats_frame, text=f"{safe_get('magic', 0)}",
+                fg="black", bg="white", font=("Arial", 10)).pack(anchor="w")
+        canvas.create_window(610, 490, window=stats_frame)
+
+        stats_frame = tk.Frame(canvas, bg="white")
+        tk.Label(stats_frame, text=f"{safe_get('armor', safe_get('defense', 0))}",
+                fg="black", bg="white", font=("Arial", 10)).pack(anchor="w")
+        canvas.create_window(610, 572, window=stats_frame)
+
+        # -----------------------------
+        # Inspect item (simple, compatible)
+        # -----------------------------
+        def inspect_item(item_obj):
+            item_win = tk.Toplevel(win)
+            item_win.title(getattr(item_obj, "name", "Objet"))
+            item_win.resizable(False, False)
+            item_win.configure(bg="black")
+
+            name = getattr(item_obj, "name", "objet")
+            desc = getattr(item_obj, "description", "")
+            img = None
+            if hasattr(self, "inventory_item_images"):
+                img = self.inventory_item_images.get(it.name)
+            if img is None and hasattr(self, "shop_item_images"):
+                img = self.shop_item_images.get(name)
+
+            if img is not None:
+                item_win.img_ref = img
+                tk.Label(item_win, image=img, bg="black").pack(padx=10, pady=10)
+            else:
+                tk.Label(item_win, text=name, fg="white", bg="black",
+                        font=("Arial", 12, "bold")).pack(padx=10, pady=10)
+
+            txt = f"{desc}\n\n"
+            # si tes items ont damage/armor/heal etc, affiche
+            for k in ["damage", "heal", "mana", "durability", "armure_phys", "armure_mag"]:
+                if hasattr(item_obj, k):
+                    txt += f"{k} : {getattr(item_obj, k)}\n"
+
+            tk.Label(item_win, text=txt, fg="white", bg="black",
+                    font=("Arial", 10), justify="left", wraplength=320).pack(padx=10, pady=10)
+
+            tk.Button(item_win, text="Fermer", command=item_win.destroy,
+                    bg="#666666", fg="white", font=("Arial", 10, "bold"), width=15).pack(pady=10)
+
+        # -----------------------------
+        # Equip / unequip (si dispo)
+        # -----------------------------
+        def equip_and_refresh(item_obj):
+            if hasattr(player, "equip_item"):
+                player.equip_item(item_obj)
+                win.destroy()
+                self.open_inventory_window()
+            else:
+                # si tu n'as pas encore le système d'équipement
+                messagebox.showinfo("Équipement", "Ton Player n'a pas encore equip_item().")
+
+        def unequip_and_refresh(slot_name):
+            if hasattr(player, "unequip_slot"):
+                player.unequip_slot(slot_name)
+                win.destroy()
+                self.open_inventory_window()
+            else:
+                messagebox.showinfo("Équipement", "Ton Player n'a pas encore unequip_slot().")
+
+        # -----------------------------
+        # Slots sac (grille 5 colonnes)
+        # -----------------------------
+        start_x = 270
+        start_y = 90
+        cell_w = 64
+        cell_h = 64
+        cols = 5
+
+        for idx, it in enumerate(bag_items):
+            row = idx // cols
+            col = idx % cols
+            x = start_x + col * cell_w
+            y = start_y + row * cell_h
+
+            slot_frame = tk.Frame(canvas, bg="black")
+            name = getattr(it, "name", "objet")
+
+            img = None
+            if hasattr(self, "inventory_item_images"):
+                img = self.inventory_item_images.get(name)
+            if img is None and hasattr(self, "shop_item_images"):
+                img = self.shop_item_images.get(name)
+
+            if img is not None:
+                slot_frame.img_ref = img
+                lbl = tk.Label(slot_frame, image=img, bg="black")
+                lbl.pack()
+            else:
+                lbl = tk.Label(slot_frame, text=name, fg="white", bg="black",
+                            font=("Arial", 8, "bold"), width=8)
+                lbl.pack()
+
+            # clic gauche = equip (si possible), clic droit = inspect
+            lbl.bind("<Button-1>", lambda e, obj=it: equip_and_refresh(obj))
+            lbl.bind("<Button-3>", lambda e, obj=it: inspect_item(obj))
+
+            canvas.create_window(x, y, window=slot_frame)
+
+        # -----------------------------
+        # Slots équipement (si ton Player les a)
+        # Si tu n'as pas ça, ça n'affichera rien (safe)
+        # -----------------------------
+        equip_slots = {
+            "helmet": (295, 415, getattr(player, "equipped_helmet", None)),
+            "armor":  (295, 485, getattr(player, "equipped_armor", None)),
+            "other":  (295, 555, getattr(player, "equipped_other", None)),
+            "shield": (500, 415, getattr(player, "equipped_shield", None)),
+            "weapon": (500, 485, getattr(player, "equipped_weapon", None)),
+            "magic":  (500, 555, getattr(player, "equipped_magic", None)),
+        }
+
+        for slot_name, (x, y, item) in equip_slots.items():
+            frame = tk.Frame(canvas, bg="black")
+
+            if item is not None:
+                name = getattr(item, "name", "objet")
+                img = None
+                if hasattr(self, "inventory_item_images"):
+                    img = self.inventory_item_images.get(name)
+                if img is None and hasattr(self, "shop_item_images"):
+                    img = self.shop_item_images.get(name)
+
+                if img is not None:
+                    frame.img_ref = img
+                    lbl = tk.Label(frame, image=img, bg="black")
+                    lbl.pack()
+                else:
+                    lbl = tk.Label(frame, text=name, fg="white", bg="black",
+                                font=("Arial", 8, "bold"), width=8)
+                    lbl.pack()
+
+                lbl.bind("<Button-1>", lambda e, s=slot_name: unequip_and_refresh(s))
+                lbl.bind("<Button-3>", lambda e, obj=item: inspect_item(obj))
+
+            canvas.create_window(x, y, window=frame)
+
+        # bouton fermer
+        close_btn = tk.Button(
+            canvas,
+            text="Fermer",
+            command=win.destroy,
+            bg="#666666",
+            fg="white",
+            font=("Arial", 10, "bold"),
+            width=18,
+        )
+        canvas.create_window(730, 550, window=close_btn)
+
+    
+
+    # ------------------------------------------------------------------
+    # Boutique / échange / inspection d'objets
+    # ------------------------------------------------------------------
+
+    def _player_items_list(self):
+        """Retourne la liste des objets de l'inventaire (dict ou list)."""
+        inv = getattr(self.game.player, "inventory", None)
+        if inv is None:
+            return []
+        if isinstance(inv, dict):
+            return list(inv.values())
+        return list(inv)
+
+    def _add_player_item(self, item):
+        inv = getattr(self.game.player, "inventory", None)
+        if inv is None:
+            self.game.player.inventory = {}
+            inv = self.game.player.inventory
+
+        if isinstance(inv, dict):
+            name = getattr(item, "name", str(item))
+            q_add = int(getattr(item, "quantity", 1) or 1)
+
+            if name in inv:
+                existing = inv[name]
+                existing.quantity = int(getattr(existing, "quantity", 1) or 1) + q_add
+            else:
+                item.quantity = q_add
+                inv[name] = item
+        else:
+            inv.append(item)
+
+
+    def _remove_player_item(self, item, qty=1):
+        inv = getattr(self.game.player, "inventory", None)
+        if inv is None:
+            return
+
+        if isinstance(inv, dict):
+            name = getattr(item, "name", "")
+            obj = inv.get(name)
+            if obj is None:
+                return
+
+            qty = int(qty or 1)
+            q = int(getattr(obj, "quantity", 1) or 1)
+            if q > qty:
+                obj.quantity = q - qty
+            else:
+                inv.pop(name, None)
+        else:
+            try:
+                inv.remove(item)
+            except ValueError:
+                pass
+
+    def _open_item_inspect_window(self, parent_win, item, price=None):
+        """Petite fenêtre pour afficher image + description + stats."""
+        w = tk.Toplevel(parent_win)
+        w.title(getattr(item, "name", "Objet"))
+        w.resizable(False, False)
+        w.configure(bg="black")
+
+        # image
+        img = None
+        if hasattr(self, "inventory_item_images"):
+            img = self.inventory_item_images.get(getattr(item, "name", "")) or self.inventory_item_images.get(getattr(item, "id", ""))
+        if img is None and hasattr(self, "shop_item_images"):
+            img = self.shop_item_images.get(getattr(item, "name", ""))
+
+        if img is not None:
+            w.img_ref = img
+            tk.Label(w, image=img, bg="black").pack(padx=10, pady=10)
+        else:
+            tk.Label(w, text=getattr(item, "name", "Objet"), fg="white", bg="black",
+                    font=("Arial", 12, "bold")).pack(padx=10, pady=10)
+
+        desc = getattr(item, "description", "") or getattr(item, "desc", "")
+        lines = [desc] if desc else []
+        if price is not None:
+            lines += ["", f"Prix : {price} or"]
+
+        # stats (si dispo)
+        def g(attr, default=0):
+            return getattr(item, attr, default) or 0
+
+        atk = g("attack", g("damage", 0))
+        mag = g("magic", 0)
+        arm = g("armor", 0)
+        hp = g("hp", 0)
+        t = getattr(item, "type", getattr(item, "item_type", ""))
+
+        if t:
+            lines.append(f"Type : {t}")
+        if any([atk, mag, arm, hp]):
+            lines.append(f"Attaque : {atk} | Magie : {mag}")
+            lines.append(f"Armure : {arm} | PV+ : {hp}")
+
+        tk.Label(w, text="\n".join(lines), fg="white", bg="black",
+                font=("Arial", 10), justify="left", wraplength=320).pack(padx=10, pady=10)
+
+        tk.Button(w, text="Fermer", command=w.destroy, bg="#666666", fg="white",
+                font=("Arial", 10, "bold"), width=15).pack(pady=10)
+
+    def open_shop_window(self, npc=None):
+        """Boutique (reprend ton ancien look)."""
+        win = tk.Toplevel(self.root)
+        win.title("Boutique du village")
+        win.geometry("800x600")
+        win.resizable(False, False)
+        win.configure(bg="black")
+
+        win.shop_bg = getattr(self, "shop_bg", None)
+
+        canvas = tk.Canvas(win, width=800, height=600, bg="black", highlightthickness=0, bd=0)
+        canvas.pack(fill="both", expand=True)
+
+        if win.shop_bg is not None:
+            canvas.create_image(400, 300, image=win.shop_bg)
+
+        gold_var = tk.StringVar(value=f"Or : {getattr(self.game.player, 'gold', 0)}")
+        info_var = tk.StringVar(
+            value="Bienvenue à la boutique du village.\nClique sur Inspecter ou Acheter."
+        )
+
+        top_frame = tk.Frame(canvas, bg="black")
+        tk.Label(top_frame, textvariable=gold_var, fg="gold", bg="black",
+                font=("Arial", 12, "bold")).pack(side="left", padx=10)
+        tk.Label(top_frame, textvariable=info_var, fg="white", bg="black",
+                font=("Arial", 11, "bold"), justify="left").pack(side="left", padx=20)
+        canvas.create_window(400, 40, window=top_frame)
+
+        shop_items = [
+            {"id": "serrated_dirk", "name": "Serrated Dirk", "price": 60,
+            "desc": "Dague rapide : bon critique.", "type": "weapon",
+            "attack": 10, "magic": 0, "armor": 0, "hp": 0},
+
+            {"id": "sheen", "name": "Sheen", "price": 150,
+            "desc": "Cristal magique : augmente la magie.", "type": "magic",
+            "attack": 0, "magic": 3, "armor": 0, "hp": 0},
+
+            {"id": "bramble_vest", "name": "Bramble Vest", "price": 80,
+            "desc": "Armure épineuse : bonne défense + un peu de PV.", "type": "armor",
+            "attack": 0, "magic": 0, "armor": 4, "hp": 15},
+
+            {"id": "zeal", "name": "Zeal", "price": 160,
+            "desc": "Équipement léger : agilité / critique.", "type": "other",
+            "attack": 0, "magic": 0, "armor": 0, "hp": 0},
+
+            {"id": "glacial_buckler", "name": "Glacial Buckler", "price": 100,
+            "desc": "Bouclier : armure + PV.", "type": "shield",
+            "attack": 0, "magic": 0, "armor": 3, "hp": 10},
+
+            {"id": "caulfields_warhammer", "name": "Caulfield's Warhammer", "price": 120,
+            "desc": "Marteau lourd : bons dégâts.", "type": "weapon",
+            "attack": 16, "magic": 0, "armor": 0, "hp": 0},
+
+            {"id": "b_f_sword", "name": "B.F. Sword", "price": 160,
+            "desc": "Épée puissante : gros dégâts.", "type": "weapon",
+            "attack": 18, "magic": 0, "armor": 0, "hp": 0},
+        ]
+
+
+        def refresh_gold():
+            gold_var.set(f"Or : {getattr(self.game.player, 'gold', 0)}")
+
+        def inspect_item(item_dict):
+            tmp = Item(
+                item_dict["id"],
+                item_dict["desc"],
+                0.1,
+                type=item_dict["type"],
+                attack=item_dict["attack"],
+                magic=item_dict["magic"],
+                armor=item_dict["armor"],
+                hp=item_dict["hp"],
+            )
+            self._open_item_inspect_window(win, tmp, price=item_dict["price"])
+
+        def buy_item(item_dict):
+            price = item_dict["price"]
+            if getattr(self.game.player, "gold", 0) < price:
+                info_var.set("Tu n'as pas assez d'or !")
+                return
+            if len(self._player_items_list()) >= 25:
+                info_var.set("Ton inventaire est plein !")
+                return
+
+            self.game.player.gold -= price
+            refresh_gold()
+
+            it = Item(
+                item_dict["id"],
+                item_dict["desc"],
+                0.1,
+                type=item_dict["type"],
+                attack=item_dict["attack"],
+                magic=item_dict["magic"],
+                armor=item_dict["armor"],
+                hp=item_dict["hp"],
+            )
+            self._add_player_item(it)
+            info_var.set(f"Tu as acheté {item_dict['name']} pour {price} or.")
+
+        col_x = [180, 400, 620]
+        row_y = [260, 380, 500]
+
+        for idx, item in enumerate(shop_items):
+            row = idx // 3
+            col = idx % 3
+            if row >= len(row_y):
+                break
+
+            slot = tk.Frame(canvas, bg="black")
+
+            img = getattr(self, "shop_item_images", {}).get(item["id"])
+            slot.img_ref = img
+            if img is not None:
+                tk.Label(slot, image=img, bg="black").pack()
+            else:
+                tk.Label(slot, text=item["name"], fg="white", bg="black",
+                        font=("Arial", 10, "bold")).pack(pady=10)
+
+            tk.Label(slot, text=item["name"], fg="white", bg="black",
+                    font=("Arial", 10, "bold")).pack(pady=2)
+
+            btns = tk.Frame(slot, bg="black")
+            btns.pack(pady=3)
+
+            tk.Button(btns, text="Inspecter", command=lambda it=item: inspect_item(it),
+                    bg="#555555", fg="white", font=("Arial", 9, "bold"), width=10).pack(side="left", padx=2)
+            tk.Button(btns, text=f"Acheter ({item['price']} or)", command=lambda it=item: buy_item(it),
+                    bg="#228822", fg="white", font=("Arial", 9, "bold"), width=16).pack(side="left", padx=2)
+
+            canvas.create_window(col_x[col], row_y[row], window=slot)
+
+        tk.Button(canvas, text="Quitter la boutique", command=win.destroy,
+                bg="#666666", fg="white", font=("Arial", 10, "bold"), width=18).place(x=310, y=560)
+
+    def get_sell_price(self, item):
+        """Prix de vente cohérent :
+        1) priorité à item.stats['vendable'] si présent
+        2) sinon, si item boutique -> moitié du prix d'achat
+        3) sinon -> petit fallback
+        """
+        name = getattr(item, "name", "")
+
+        # 1) PRIORITÉ : vendable défini sur l'item
+        stats = getattr(item, "stats", {}) or {}
+        if "vendable" in stats and stats["vendable"] is not None:
+            try:
+                return max(0, int(stats["vendable"]))
+            except Exception:
+                pass
+
+        # 2) Restes “spéciaux” (tu peux garder tes valeurs)
+        reste_values = {
+            "reste_zombie": 8,
+            "reste_oeil": 10,
+            "reste_rat": 4,
+            "reste_champignon": 6,
+            "reste_chauve_souris": 5,
+        }
+        if name in reste_values:
+            return reste_values[name]
+
+        # 3) Revente des objets de boutique : moitié du prix d'achat
+        shop_buy_prices = {
+            "b_f_sword": 260,
+            "bramble_vest": 160,
+            "caulfields_warhammer": 220,
+            "glacial_buckler": 180,
+            "serrated_dirk": 140,
+            "sheen": 150,
+            "zeal": 160,
+        }
+        if name in shop_buy_prices:
+            return shop_buy_prices[name] // 2
+
+        # 4) fallback faible (au lieu de 50)
+        return 2
+
+
+
+    def open_exchange_window(self, npc=None):
+        """Salle d'échange (reprend ton ancien look)."""
+        player = self.game.player
+
+        win = tk.Toplevel(self.root)
+        win.title("Échange - Salle d'échange du village")
+        win.geometry("1100x800")
+        win.resizable(False, False)
+        win.configure(bg="black")
+
+        canvas = tk.Canvas(win, width=1100, height=800, bg="black", highlightthickness=0, bd=0)
+        canvas.pack(fill="both", expand=True)
+
+        bg = getattr(self, "shop_bgg", None)
+        if bg is not None:
+            win.shop_bg_ref = bg
+            canvas.create_image(550, 400, image=bg)
+
+        gold_var = tk.StringVar(value=f"Or : {getattr(player, 'gold', 0)}")
+        info_var = tk.StringVar(
+            value=(
+                "Bienvenue dans la salle d'échange.\n"
+                "À droite : ton inventaire. Clique sur Vendre.\n"
+                "À gauche : les objets déjà vendus."
+            )
+        )
+
+        top_frame = tk.Frame(canvas, bg="black")
+        tk.Label(top_frame, textvariable=gold_var, fg="gold", bg="black",
+                font=("Arial", 12, "bold")).pack(side="left", padx=10)
+        tk.Label(top_frame, textvariable=info_var, fg="white", bg="black",
+                font=("Arial", 11, "bold"), justify="left").pack(side="left", padx=20)
+        canvas.create_window(550, 70, window=top_frame)
+
+        def refresh_gold():
+            gold_var.set(f"Or : {getattr(player, 'gold', 0)}")
+
+        # positions
+        sold_slots_positions = []
+        sold_xs = [40, 140]
+        sold_ys = [175, 255, 335, 420, 505, 590, 670, 750]
+        for y in sold_ys:
+            for x in sold_xs:
+                sold_slots_positions.append((x, y))
+
+        inventory_slots_positions = []
+        inv_xs = [300, 535, 760, 990]
+        inv_ys = [250, 340, 425, 510, 590, 675, 750]
+        for y in inv_ys:
+            for x in inv_xs:
+                inventory_slots_positions.append((x, y))
+
+        inventory_windows = []
+        sold_index = {"i": 0}
+
+        def clear_inventory_windows():
+            for wid in inventory_windows:
+                canvas.delete(wid)
+            inventory_windows.clear()
+
+        def add_sold_item_view(item):
+            if sold_index["i"] >= len(sold_slots_positions):
+                return
+            x, y = sold_slots_positions[sold_index["i"]]
+            sold_index["i"] += 1
+
+            frame = tk.Frame(canvas, bg="black")
+            img = (
+                getattr(self, "inventory_item_images", {}).get(getattr(item, "name", ""))
+                or getattr(self, "shop_item_images", {}).get(getattr(item, "name", ""))
+            )
+            if img is not None:
+                frame.img_ref = img
+                tk.Label(frame, image=img, bg="black").pack()
+            else:
+                tk.Label(frame, text=getattr(item, "name", "item"), fg="white", bg="black",
+                        font=("Arial", 8, "bold")).pack()
+
+            canvas.create_window(x, y, window=frame)
+
+        def inspect_item(item):
+            self._open_item_inspect_window(win, item, price=self.get_sell_price(item))
+
+        def sell_item(item):
+            price = self.get_sell_price(item)
+            player.gold = getattr(player, "gold", 0) + price
+            self._remove_player_item(item)
+            info_var.set(f"Tu vends {getattr(item, 'name', 'objet')} pour {price} or.")
+            refresh_gold()
+            add_sold_item_view(item)
+            refresh_inventory_view()
+
+        def refresh_inventory_view():
+            clear_inventory_windows()
+            bag_items = self._player_items_list()
+
+            for idx, it in enumerate(bag_items):
+                if idx >= len(inventory_slots_positions):
+                    break
+
+                x, y = inventory_slots_positions[idx]
+                frame = tk.Frame(canvas, bg="black")
+
+                img = (
+                    getattr(self, "inventory_item_images", {}).get(getattr(it, "name", ""))
+                    or getattr(self, "shop_item_images", {}).get(getattr(it, "name", ""))
+                )
+                if img is not None:
+                    frame.img_ref = img
+                    tk.Label(frame, image=img, bg="black").pack()
+                else:
+                    tk.Label(frame, text=getattr(it, "name", "item"), fg="white", bg="black",
+                            font=("Arial", 8, "bold"), width=12).pack()
+
+                btn_frame = tk.Frame(frame, bg="black")
+                btn_frame.pack(pady=2)
+
+                tk.Button(btn_frame, text="Inspecter", command=lambda obj=it: inspect_item(obj),
+                        bg="#555555", fg="white", font=("Arial", 8, "bold"), width=9).pack(side="left", padx=1)
+
+                p = self.get_sell_price(it)
+                tk.Button(btn_frame, text=f"Vendre ({p} or)", command=lambda obj=it: sell_item(obj),
+                        bg="#884422", fg="white", font=("Arial", 8, "bold"), width=14).pack(side="left", padx=1)
+
+                win_id = canvas.create_window(x, y, window=frame)
+                inventory_windows.append(win_id)
+
+        refresh_inventory_view()
+
+        close_btn = tk.Button(canvas, text="Quitter l'échange", command=win.destroy,
+                            bg="#666666", fg="white", font=("Arial", 10, "bold"), width=18)
+        canvas.create_window(550, 750, window=close_btn)
+
+    
+
+    def show_quests(self):
+        win = tk.Toplevel(self.root)
+        win.title("Quêtes")
+        win.geometry("600x450")
+        win.resizable(False, False)
+
+        text = tk.Text(win, width=70, height=22)
+        text.pack(padx=10, pady=10)
+
+        qm = getattr(self.game.player, "quest_manager", None)
+        if qm is None:
+            text.insert("1.0", "Aucun gestionnaire de quêtes.")
+        else:
+            out = []
+            for q in getattr(qm, "quests", []):
+                out.append(str(q))
+            if not out:
+                out = ["Aucune quête."]
+            text.insert("1.0", "\n".join(out))
+
+        text.configure(state="disabled")
+    
+    def open_combat_window(self, monster):
+        """Fenêtre de combat contre un monstre (version compatible avec ton projet actuel)."""
+
+        import random
+        import tkinter as tk
+        from tkinter import messagebox, scrolledtext
+
+        player = self.game.player
+
+        def get_attack_value(entity):
+            """Retourne un dégât BRUT (avant armure du joueur)."""
+            import random
+
+            # 1) MonsterCharacter de ton projet : dmg_min / dmg_max :contentReference[oaicite:1]{index=1}
+            dmin = getattr(entity, "dmg_min", None)
+            dmax = getattr(entity, "dmg_max", None)
+            if dmin is not None and dmax is not None:
+                try:
+                    return int(random.randint(int(dmin), int(dmax)))
+                except Exception:
+                    pass
+
+            # 2) autres conventions possibles
+            if hasattr(entity, "attack") and hasattr(entity, "attack_max"):
+                try:
+                    return int(random.randint(int(getattr(entity, "attack")), int(getattr(entity, "attack_max"))))
+                except Exception:
+                    pass
+
+            if hasattr(entity, "attack_min") and hasattr(entity, "attack_max"):
+                try:
+                    return int(random.randint(int(getattr(entity, "attack_min")), int(getattr(entity, "attack_max"))))
+                except Exception:
+                    pass
+
+            # 3) fallback
+            if callable(getattr(entity, "get_attack", None)):
+                try:
+                    return int(entity.get_attack())
+                except Exception:
+                    return 1
+
+            return 1
+
+
+        def get_armor_value(entity):
+            # Player : parfois armor, parfois defense
+            if hasattr(entity, "armor"):
+                return int(getattr(entity, "armor") or 0)
+            if hasattr(entity, "defense"):
+                return int(getattr(entity, "defense") or 0)
+            return 0
+        def norm(s):
+            return str(s).lower().replace("_", "-").strip()
+        combat_room = player.current_room  # salle où le combat commence
+
+
+        def trigger_mage_rescue(monster_obj, room_obj):
+            """Intervention du mage : sauve à 1 HP, tue les bandits, donne un item."""
+            game = self.game
+
+            # sécurité : HP min 1
+            if getattr(player, "hp", 0) <= 0:
+                player.hp = 1
+            else:
+                player.hp = max(1, int(player.hp))
+
+            # Affichage / message
+            set_info(
+                "✨ Le mage apparaît dans un éclat de lumière !\n"
+                "⚡ Il lance un sort dévastateur sur les bandits..."
+            )
+            refresh_hp()
+
+            # (si tu as l'image du mage, on l'affiche au centre)
+            mage_img = self.npc_images.get("mage")
+            if mage_img:
+                try:
+                    if not hasattr(win, "mage_overlay"):
+                        win.mage_overlay = tk.Label(win, image=mage_img, bg="black")
+                    win.mage_overlay.place(relx=0.5, rely=0.5, anchor="center")
+                except Exception:
+                    pass
+
+            # Supprimer les bandits de la salle (chez toi les monstres sont dans room.characters)
+            try:
+                # enlever par clé directe si possible
+                room_obj.characters.pop("bandits", None)
+
+                # fallback : enlever toute entrée dont le name == "bandits"
+                for k in list(room_obj.characters.keys()):
+                    ent = room_obj.characters.get(k)
+                    if ent and str(getattr(ent, "name", "")).lower().strip() == "bandits":
+                        room_obj.characters.pop(k, None)
+            except Exception:
+                pass
+
+            # Donner l'item du mage
+            given = None
+            if hasattr(game, "rod_of_ages") and game.rod_of_ages:
+                given = game.rod_of_ages
+                try:
+                    player.inventaire.append(given)
+                except Exception:
+                    # si ton inventaire est un dict :
+                    try:
+                        player.inventaire[given.name] = given
+                    except Exception:
+                        pass
+
+            game.route_bandits_done = True
+
+            msg = "✅ Tu survis de justesse (1 HP). Le mage t’a sauvé."
+            if given:
+                msg += f"\n🎁 Il te donne : {getattr(given, 'display_name', given.name)}."
+            msg += "\n\nLe mage disparaît..."
+
+            def finish():
+                try:
+                    if hasattr(win, "mage_overlay"):
+                        win.mage_overlay.destroy()
+                except Exception:
+                    pass
+                end_combat(msg)
+
+            win.after(1000, finish)
+
+
+        # état combat
+        self.in_combat = True
+
+        # HP max fallback
+        monster_max_hp = getattr(monster, "max_hp", None)
+        if monster_max_hp is None:
+            monster_max_hp = getattr(monster, "hp_max", None)
+        if monster_max_hp is None:
+            monster_max_hp = getattr(monster, "hp", 0)
+
+        player_max_hp = getattr(player, "max_hp", None)
+        if player_max_hp is None:
+            player_max_hp = getattr(player, "hp_max", None)
+        if player_max_hp is None:
+            player_max_hp = getattr(player, "hp", 0)
+
+        win = tk.Toplevel(self.root)
+        self.in_combat = True
+        # Empêche d'interagir avec la fenêtre principale tant que le combat est ouvert
+        win.transient(self.root)   # si tu as self.root comme fenêtre principale
+        win.grab_set()             # rend la fenêtre modale (les clics vont vers elle)
+        win.focus_force()
+        win.title(f"Combat contre {monster.name}")
+        win.geometry("800x600")
+        win.resizable(False, False)
+        win.configure(bg="black")
+
+        # pas fermer par la croix pendant le combat
+        win.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        # Images
+        win.hero_img = getattr(self, "hero", None) or getattr(self, "hero_portrait", None)
+        # chez toi, monster_images est dict par nom ("gobelin", "slime", ...)
+        mkey = str(getattr(monster, "name", "")).lower()
+        win.monster_img = self.monster_images.get(mkey)
+
+        # Layout
+        # Layout (combat à gauche + historique à droite)
+        main_frame = tk.Frame(win, bg="black")
+        main_frame.pack(fill="both", expand=True)
+
+        left_frame = tk.Frame(main_frame, bg="black")
+        left_frame.pack(side="left", fill="both", expand=True)
+
+        right_frame = tk.Frame(main_frame, bg="black", width=260)
+        right_frame.pack(side="right", fill="y")
+        right_frame.pack_propagate(False)
+
+        # Zone historique
+        tk.Label(
+            right_frame, text="Historique", fg="white", bg="black",
+            font=("Arial", 12, "bold")
+        ).pack(pady=(10, 5))
+
+        log_text = scrolledtext.ScrolledText(
+            right_frame,
+            width=32, height=28,
+            bg="#101010", fg="white",
+            insertbackground="white",
+            font=("Consolas", 10),
+            state="disabled",
+            wrap="word"
+        )
+        log_text.pack(padx=10, pady=(0, 10), fill="both", expand=True)
+
+        def log_event(msg: str):
+            """Ajoute une ligne à l'historique à droite."""
+            if not msg:
+                return
+            log_text.configure(state="normal")
+            log_text.insert("end", msg.strip() + "\n")
+            log_text.see("end")
+            log_text.configure(state="disabled")
+
+        # Frames combat (dans left_frame)
+        top_frame = tk.Frame(left_frame, bg="black")
+        top_frame.pack(pady=10)
+
+        bottom_frame = tk.Frame(left_frame, bg="black")
+        bottom_frame.pack(pady=10, fill="x")
+
+
+        # Héros (gauche)
+        hero_frame = tk.Frame(top_frame, bg="black")
+        hero_frame.pack(side="left", padx=40)
+
+        tk.Label(hero_frame, text=player.name, fg="white", bg="black",
+                font=("Arial", 14, "bold")).pack()
+
+        if win.hero_img is not None:
+            tk.Label(hero_frame, image=win.hero_img, bg="black").pack(pady=5)
+        else:
+            tk.Label(hero_frame, text="[hero img manquante]", fg="white", bg="black").pack(pady=5)
+
+        hero_hp_var = tk.StringVar(value=f"{player.hp} / {player_max_hp}")
+        tk.Label(hero_frame, textvariable=hero_hp_var, fg="white", bg="black",
+                font=("Arial", 12)).pack()
+
+        # Monstre (droite)
+        monster_frame = tk.Frame(top_frame, bg="black")
+        monster_frame.pack(side="right", padx=40)
+
+        tk.Label(monster_frame, text=monster.name, fg="red", bg="black",
+                font=("Arial", 14, "bold")).pack()
+
+        if win.monster_img is not None:
+            tk.Label(monster_frame, image=win.monster_img, bg="black").pack(pady=5)
+        else:
+            tk.Label(monster_frame, text="[image monstre manquante]", fg="red", bg="black").pack(pady=5)
+
+        monster_hp_var = tk.StringVar(value=f"{monster.hp} / {monster_max_hp}")
+        tk.Label(monster_frame, textvariable=monster_hp_var, fg="red", bg="black",
+                font=("Arial", 12)).pack()
+
+        # Infos
+        info_var = tk.StringVar(value=f"Un {monster.name} te fait face !")
+        def set_info(msg: str):
+            """Met à jour le texte principal + ajoute une ligne dans l'historique."""
+            if not msg:
+                return
+            info_var.set(msg)
+            log_event(msg)
+
+        # Message initial dans l'historique aussi
+        log_event(info_var.get())
+
+        info_label = tk.Label(bottom_frame, textvariable=info_var,
+                            fg="white", bg="black", font=("Arial", 11),
+                            wraplength=700, justify="left")
+        info_label.pack(pady=10)
+
+        buttons_frame = tk.Frame(bottom_frame, bg="black")
+        buttons_frame.pack(pady=10)
+
+        action_buttons = []
+        state = {"player_turn": True}
+
+        def refresh_hp():
+            hero_hp_var.set(f"{player.hp} / {player_max_hp}")
+            monster_hp_var.set(f"{monster.hp} / {monster_max_hp}")
+
+
+        def is_monster_dead():
+            # compatible avec ton MonsterCharacter (il a is_alive() dans ton Actions.fight)
+            if callable(getattr(monster, "is_alive", None)):
+                return not monster.is_alive()
+            return getattr(monster, "hp", 0) <= 0
+
+        def end_combat(message):
+            set_info(message)
+            self.in_combat = False
+
+            # maintenant on peut fermer
+            win.protocol("WM_DELETE_WINDOW", win.destroy)
+
+            for b in action_buttons:
+                b.config(state="disabled")
+
+            close_btn = tk.Button(
+                bottom_frame,
+                text="Terminer le combat",
+                command=lambda: (win.destroy(), self.update_room_view()),
+                bg="#666666",
+                fg="white",
+                font=("Arial", 10, "bold"),
+                width=18,
+            )
+            close_btn.pack(pady=5)
+
+        def monster_turn():
+            if is_monster_dead():
+                return
+            if player.hp <= 0:
+                return
+
+            state["player_turn"] = False
+
+            raw = get_attack_value(monster)
+
+            game = self.game
+            room = player.current_room
+
+            # ✅ Combat spécial : bandits sur la route vers capitale
+            is_bandits = norm(monster.name) == "bandits"
+            is_route_capitale = norm(room.name) in ("route_capitale", "route_capitale", "route_capitale", "route_capitale")
+
+            protected_by_mage = (
+            is_route_capitale
+            and is_bandits
+            and (getattr(game, "saved_merchant", False) or getattr(game, "following_npc", None) is not None)
+        )
+
+
+            #  Si le mage doit intervenir et n'a pas encore agi
+            if protected_by_mage and not getattr(game, "mage_already_intervened", False):
+                # on estime les dégâts qui seraient pris maintenant
+                armor_p = get_armor_value(player)
+                estimated = max(1, int(raw * (100 / (100 + armor_p))))  # même style que ta logique précédente mais sans min absurde
+                new_hp = player.hp - estimated
+
+
+                # coup "fatal" => blocage à 1 HP + intervention mage
+                if new_hp <= 1:
+                    player.hp = 1
+                    refresh_hp()
+                    game.mage_already_intervened = True
+                    set_info(
+                        "Les bandits t'encerclent et l'un d'eux lève sa lame pour t'achever...\n"
+                        "Mais une explosion de lumière te submerge !"
+                    )
+                    win.after(1000, lambda: trigger_mage_rescue(monster, combat_room))
+                    return
+
+            # ✅ Cas normal (avec attaques spéciales si dispo)
+            # MonsterCharacter possède perform_action() + patterns :contentReference[oaicite:2]{index=2}
+            if callable(getattr(monster, "perform_action", None)):
+                ctx = {"turn": getattr(monster, "turn_counter", 0), "room": player.current_room}
+                before_hp = int(getattr(player, "hp", 0))
+
+                res = monster.perform_action(player, context=ctx)
+                msg = res.get("message", f"{monster.name} agit...")
+
+                after_hp = int(getattr(player, "hp", 0))
+                delta = after_hp - before_hp  # positif = heal, négatif = dégâts
+
+                # Log détaillé
+                extras = []
+                if isinstance(res, dict):
+                    if "pattern" in res:
+                        extras.append(f"Pattern: {res['pattern']}")
+
+                    # ✅ Annoncé = BRUT (raw_dmg si dispo), et on affiche aussi le réel
+                    if "raw_dmg" in res:
+                        extras.append(f"Dégâts annoncés: {res['raw_dmg']}")  # brut
+                        if "dmg" in res:
+                            extras.append(f"Dégâts réels: {res['dmg']}")     # après réduction
+                    elif "dmg" in res:
+                        # fallback si raw_dmg n'existe pas
+                        extras.append(f"Dégâts annoncés: {res['dmg']}")
+
+                    if "heal" in res:
+                        extras.append(f"Heal annoncé: +{res['heal']}")
+                    if res.get("is_crit"):
+                        extras.append("CRITIQUE!")
+
+
+                # Ce qui s'est VRAIMENT passé sur tes HP
+                if delta < 0:
+                    extras.append(f"➡️ Tu subis réellement: {-delta} HP")
+                elif delta > 0:
+                    extras.append(f"➡️ Tu récupères réellement: +{delta} HP")
+                else:
+                    extras.append("➡️ Aucun changement HP")
+
+                if extras:
+                    msg = msg + "\n   → " + " | ".join(extras)
+
+                set_info(msg)
+
+
+                # si fuite du monstre
+                if res.get("result") == "fled":
+                    refresh_hp()
+                    end_combat(msg)
+                    return
+
+            else:
+                # Combat simple : dégâts bruts puis armure via player.take_damage()
+                raw = get_attack_value(monster)
+
+                if callable(getattr(player, "take_damage", None)):
+                    dmg = player.take_damage(raw)
+                else:
+                    dmg = int(raw)
+                    player.hp -= dmg
+
+                set_info(f"Le {monster.name} t'attaque et inflige {dmg} dégâts.")
+
+
+            if player.hp <= 0:
+                player.hp = 0
+                refresh_hp()
+                win.destroy()
+                self.show_game_over()
+                return
+
+            # regen / tick si la classe le supporte
+            if callable(getattr(monster, "regen_step", None)):
+                monster.regen_step()
+            elif callable(getattr(monster, "regen", None)):
+                monster.regen()  # si jamais ton MonsterCharacter a regen()
+
+            # Fin du tour du monstre => 1 round est passé -> décrémente les buffs
+            if callable(getattr(player, "tick_buffs", None)):
+                try:
+                    player.tick_buffs(1)
+                except Exception:
+                    pass
+
+
+            refresh_hp()
+            state["player_turn"] = True
+
+
+
+        def victory_cleanup():
+            # enlever le monstre de la salle (TON projet : room.characters dict)
+            room = player.current_room
+            key = mkey
+            if key in room.characters and room.characters[key] is monster:
+                del room.characters[key]
+            else:
+                # sécurité : si clé différente
+                for k, v in list(room.characters.items()):
+                    if v is monster:
+                        del room.characters[k]
+                        break
+
+            # loot (si ta classe gère)
+            if callable(getattr(monster, "drop_loot", None)):
+                monster.drop_loot()
+
+            # quêtes
+            qm = getattr(player, "quest_manager", None)
+            if qm:
+                xp = int(getattr(monster, "xp_reward", 0) or 0)
+                if xp > 0 and callable(getattr(player, "gain_xp", None)):
+                    player.gain_xp(xp)
+                try:
+                    qm.check_action_objectives("tuer", monster.name)
+                except Exception as e:
+                    print(f"\n[ERREUR Quêtes] check_action_objectives(tuer, {monster.name}) -> {e}\n")
+
+
+            self.game.check_end_game()
+            self.update_room_view()
+
+        def action_attaquer():
+            if not state["player_turn"] or is_monster_dead():
+                return
+
+            # --- dégâts bruts du joueur ---
+            if callable(getattr(player, "get_attack_value", None)):
+                raw = int(player.get_attack_value())
+            elif callable(getattr(player, "get_attack", None)):
+                raw = int(player.get_attack())
+            else:
+                raw = int(getattr(player, "attack", 10))
+
+            # --- appliquer une SEULE fois les dégâts ---
+            before = int(getattr(monster, "hp", 0))
+
+            if callable(getattr(monster, "take_damage", None)):
+                # take_damage gère l'armure du monstre dans ton projet
+                monster.take_damage(raw)
+            else:
+                # fallback si pas de take_damage : on applique une réduction simple via get_armor_value
+                armor = get_armor_value(monster)
+                final = max(1, raw - max(0, armor)) if raw > 0 else 0
+                monster.hp = max(0, before - final)
+
+            after = int(getattr(monster, "hp", 0))
+            real = before - after
+
+            # --- log complet (brut -> réel) ---
+            armor_val = get_armor_value(monster)
+            if armor_val > 0:
+                log_event(f"🗡️ Tu attaques {monster.name} : brut {raw} → armure {armor_val} → réel {real}")
+            else:
+                log_event(f"🗡️ Tu attaques {monster.name} : dégâts {real}")
+
+            set_info(f"Tu attaques {monster.name}.")
+            refresh_hp()
+
+            if is_monster_dead():
+                victory_cleanup()
+                end_combat(f"Victoire ! Tu as vaincu {monster.name}.")
+                return
+
+            state["player_turn"] = False
+            win.after(500, monster_turn)
+
+
+        def action_fuir():
+            if not state["player_turn"] or is_monster_dead():
+                return
+
+            if random.random() < 0.5:
+                set_info("Tu réussis à fuir !")
+                # retour salle de départ (combat_room)
+                player.current_room = combat_room
+                refresh_hp()
+                end_combat("Tu as fui le combat.")
+                self.update_room_view()
+            else:
+                set_info("Tu essaies de fuir, mais il te rattrape !")
+                refresh_hp()
+                state["player_turn"] = False
+                win.after(500, monster_turn)
+
+        def action_inventaire():
+            # si tu as déjà open_inventory_window
+            if hasattr(self, "open_inventory_window"):
+                # On expose un callback de log à l'inventaire si tu veux l'utiliser
+                self.combat_log_callback = log_event
+                self.open_inventory_window()
+            else:
+                messagebox.showinfo("Inventaire", "Fonction inventaire non disponible ici.")
+
+        def action_consumer():
+            """Ouvre une fenêtre listant les consommables, et en consomme un (ça coûte 1 tour)."""
+            if not state["player_turn"] or is_monster_dead():
+                return
+
+            inv = getattr(player, "inventory", {})
+            if not isinstance(inv, dict) or not inv:
+                messagebox.showinfo("Consommer", "Aucun objet dans l'inventaire.")
+                return
+
+            # filtre consommables
+            items = []
+            for nm, it in inv.items():
+                try:
+                    if callable(getattr(player, "is_consumable", None)) and player.is_consumable(it):
+                        items.append((nm, it))
+                except Exception:
+                    pass
+
+            if not items:
+                messagebox.showinfo("Consommer", "Tu n'as aucun consommable (pomme / potions) dans ton inventaire.")
+                return
+
+            w = tk.Toplevel(win)
+            w.title("Consommables")
+            w.geometry("420x420")
+            w.resizable(False, False)
+            w.configure(bg="black")
+            w.grab_set()
+
+            tk.Label(
+                w,
+                text="Choisis un objet à consommer (cela termine ton tour)",
+                fg="white",
+                bg="black",
+                font=("Arial", 11, "bold"),
+                wraplength=380,
+                justify="left",
+            ).pack(padx=10, pady=(12, 8))
+
+            container = tk.Frame(w, bg="black")
+            container.pack(fill="both", expand=True, padx=10, pady=10)
+
+            cols = 2
+            for idx, (nm, it) in enumerate(items):
+                r = idx // cols
+                c = idx % cols
+                label = getattr(it, "display_name", None) or getattr(it, "name", nm)
+
+                def _consume(target_name=nm):
+                    if not state["player_turn"]:
+                        return
+                    try:
+                        res = player.consume_item(target_name) if callable(getattr(player, "consume_item", None)) else None
+                    except Exception as e:
+                        res = {"changed": False, "message": f"Erreur: {e}"}
+
+                    msg = "Objet consommé." if not isinstance(res, dict) else res.get("message", "Objet consommé.")
+                    set_info(msg)
+                    refresh_hp()
+                    try:
+                        w.destroy()
+                    except Exception:
+                        pass
+
+                    # Consommer = 1 tour -> au monstre
+                    state["player_turn"] = False
+                    win.after(500, monster_turn)
+
+                btn = tk.Button(
+                    container,
+                    text=str(label),
+                    command=_consume,
+                    bg="#335522",
+                    fg="white",
+                    font=("Arial", 10, "bold"),
+                    width=18,
+                )
+                btn.grid(row=r, column=c, padx=8, pady=8, sticky="ew")
+
+            for c in range(cols):
+                container.grid_columnconfigure(c, weight=1)
+
+            tk.Button(
+                w,
+                text="Fermer",
+                command=w.destroy,
+                bg="#666666",
+                fg="white",
+                font=("Arial", 10, "bold"),
+                width=14,
+            ).pack(pady=(0, 12))
+
+
+        btn_attaquer = tk.Button(
+            buttons_frame, text="Attaquer", command=action_attaquer,
+            bg="#992222", fg="white", font=("Arial", 11, "bold"), width=12
+        )
+        btn_attaquer.grid(row=0, column=0, padx=10)
+
+        btn_fuir = tk.Button(
+            buttons_frame, text="Fuir", command=action_fuir,
+            bg="#555555", fg="white", font=("Arial", 11, "bold"), width=12
+        )
+        btn_fuir.grid(row=0, column=1, padx=10)
+
+        btn_cons = tk.Button(
+            buttons_frame, text="Consommer", command=action_consumer,
+            bg="#335522", fg="white", font=("Arial", 11, "bold"), width=12
+        )
+        btn_cons.grid(row=0, column=2, padx=10)
+
+
+        btn_inv = tk.Button(
+            buttons_frame, text="Inventaire", command=action_inventaire,
+            bg="#224499", fg="white", font=("Arial", 11, "bold"), width=12
+        )
+        btn_inv.grid(row=0, column=3, padx=10)
+
+
+        action_buttons.extend([btn_attaquer, btn_fuir, btn_cons, btn_inv])
+        refresh_hp()
+
+
+    def restart_game(self):
+        """Relance une nouvelle partie (reset complet du Game)."""
+        self.text.configure(state="normal")
+        self.text.delete("1.0", "end")
+        self.text.configure(state="disabled")
+
+        from tkinter import simpledialog
+        player_name = simpledialog.askstring("Nom du joueur", "Entrez votre nom :", parent=self.root)
+        if not player_name:
+            player_name = "Hero"
+
+        from game import Game
+        self.game = Game()
+        self.game.setup(player_name=player_name)
+        self.game.gui = self
+        self.in_combat = False
+
+        self.game.print_welcome()
+        self.update_room_view()
+
+
+    def show_game_over(self):
+        """Affiche un écran de Game Over."""
+        self.in_combat = False
+        if getattr(self, "game", None):
+            self.game.finished = True
+
+        # fermer tous les toplevels existants
+        for widget in self.root.winfo_children():
+            if isinstance(widget, tk.Toplevel):
+                widget.destroy()
+
+        go = tk.Toplevel(self.root)
+        go.title("Game Over")
+        go.geometry("800x600")
+        go.resizable(False, False)
+        go.configure(bg="black")
+        go.grab_set()
+
+        canvas = tk.Canvas(go, width=800, height=600, bg="black", highlightthickness=0, bd=0)
+        canvas.pack(fill="both", expand=True)
+
+        img = getattr(self, "game_over_image", None)
+        if img is not None:
+            go.bg_img = img
+            canvas.create_image(400, 300, image=img)
+        else:
+            canvas.create_text(400, 250, text="GAME OVER", fill="red", font=("Arial", 40, "bold"))
+
+        yes_btn = tk.Button(
+            go, text="YES",
+            command=lambda: (go.destroy(), self.restart_game()),
+            bg="#666666", fg="white", font=("Arial", 12, "bold"), width=10
+        )
+        canvas.create_window(400, 550, window=yes_btn)
+
+        go.protocol("WM_DELETE_WINDOW", lambda: None)
+
+
+
+def main():
+    root = tk.Tk()
+    GameGUI(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()

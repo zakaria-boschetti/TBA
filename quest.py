@@ -1,3 +1,6 @@
+from item import Item
+
+
 """ Define the Quest class"""
 
 class Quest:
@@ -15,7 +18,7 @@ class Quest:
     """
 
 
-    def __init__(self, title, description, objectives=None, reward=None):
+    def __init__(self, title, description, objectives=None, reward=None, xp_reward=0):
         """
         Initialize a new quest.
         
@@ -44,6 +47,7 @@ class Quest:
         self.is_completed = False
         self.is_active = False
         self.reward = reward
+        self.xp_reward = int(xp_reward or 0)
 
 
     def activate(self):
@@ -127,10 +131,30 @@ class Quest:
         if not self.is_completed:
             self.is_completed = True
             print(f"\n🏆 Quête terminée: {self.title}")
-            if self.reward:
-                print(f"🎁 Récompense: {self.reward}")
-                if player:
-                    player.add_reward(self.reward)
+            # XP de quête
+            if player and self.xp_reward > 0 and callable(getattr(player, "gain_xp", None)):
+                player.gain_xp(self.xp_reward)
+
+            # Reward = item (dans l'inventaire)
+            if self.reward and player:
+                r = self.reward
+
+                # Si reward est une string, on tente de récupérer un item du Game (player.game.<nom>)
+                if isinstance(r, str):
+                    g = getattr(player, "game", None)
+                    if g is not None and hasattr(g, r):
+                        r = getattr(g, r)
+
+                rname = getattr(r, "name", str(r))
+                print(f"🎁 Récompense: {rname}")
+
+                # Si on a bien un Item, on l'ajoute
+                if hasattr(r, "weight") and callable(getattr(player, "add_item", None)):
+                    player.add_item(r)
+                else:
+                    print(f"[WARN] Reward non ajoutée car ce n'est pas un Item: {self.reward}")
+
+
             print()
 
 
@@ -267,17 +291,20 @@ class Quest:
         >>> quest.check_room_objective("Tower")
         False
         """
+        room_name = (room_name or "").strip().lower()
+
         room_objectives = [
-            f"Visiter {room_name}",
-            f"Explorer {room_name}",
-            f"Aller à {room_name}",
-            f"Entrer dans {room_name}"
+            f"visiter {room_name}",
+            f"explorer {room_name}",
+            f"aller {room_name}",
+            f"entrer {room_name}",
         ]
 
         for objective in room_objectives:
             if self.complete_objective(objective, player):
                 return True
         return False
+
 
 
     def check_action_objective(self, action, target=None, player=None):
@@ -459,7 +486,8 @@ class QuestManager:
         for quest in self.quests:
             if quest.title == quest_title and not quest.is_active:
                 quest.activate()
-                self.active_quests.append(quest)
+                if quest not in self.active_quests:
+                    self.active_quests.append(quest)
                 return True
         return False
 
@@ -498,7 +526,9 @@ class QuestManager:
             if quest.complete_objective(objective_text):
                 # Remove completed quests from active list
                 if quest.is_completed:
-                    self.active_quests.remove(quest)
+                    if quest in self.active_quests:
+                        self.active_quests.remove(quest)
+
                 return True
         return False
 
@@ -532,7 +562,8 @@ class QuestManager:
         for quest in self.active_quests[:]:  # Use slice to avoid modification during iteration
             quest.check_room_objective(room_name, self.player)
             if quest.is_completed:
-                self.active_quests.remove(quest)
+                if quest in self.active_quests:
+                    self.active_quests.remove(quest)
 
 
     def check_action_objectives(self, action, target=None):
@@ -562,10 +593,15 @@ class QuestManager:
         >>> len(manager.active_quests)
         0
         """
+
+        if getattr(self, "_in_reward", False):
+            return
         for quest in self.active_quests[:]:
             quest.check_action_objective(action, target, self.player)
             if quest.is_completed:
-                self.active_quests.remove(quest)
+                if quest in self.active_quests:
+                    self.active_quests.remove(quest)
+
 
 
     def check_counter_objectives(self, counter_name, current_count):
@@ -601,7 +637,8 @@ class QuestManager:
         for quest in self.active_quests[:]:
             quest.check_counter_objective(counter_name, current_count, self.player)
             if quest.is_completed:
-                self.active_quests.remove(quest)
+                if quest in self.active_quests:
+                    self.active_quests.remove(quest)
 
 
     def get_active_quests(self):
@@ -741,5 +778,13 @@ class QuestManager:
             print(f"\nQuête '{quest_title}' non trouvée.\n")
             
     def all_quests_completed(self):
-        """Retourne True si toutes les quêtes sont terminées."""
-        return len(self.active_quests) == 0 and all(q.is_completed for q in self.quests)
+        """Retourne True si toutes les quêtes du jeu sont terminées."""
+        if not self.quests:
+            return False
+        return all(q.is_completed for q in self.quests)
+    
+    def check_action(self, action, target=None):
+        # Alias compat : certains endroits appellent encore check_action(...)
+        return self.check_action_objectives(action, target)
+
+
